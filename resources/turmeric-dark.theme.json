@@ -1,0 +1,51 @@
+{
+    "name": "Turmeric Dark",
+    "editor": {
+        "background": "#0C0A08",
+        "foreground": "#EAE0D2",
+        "caret": "#D48B1C",
+        "selectionBackground": "#D48B1C2E",
+        "currentLineBackground": "#111009",
+        "lineNumberForeground": "#453F39",
+        "lineNumberBackground": "#0C0A08",
+        "activeLineNumberForeground": "#88796C",
+        "matchedBraceForeground": "#EFA030",
+        "matchedBraceBackground": "#D48B1C1F",
+        "indentGuide": "#252119"
+    },
+    "terminal": {
+        "background": "#0C0A08",
+        "foreground": "#EAE0D2",
+        "caret": "#D48B1C"
+    },
+    "styles": {
+        "default":        { "fg": "#EAE0D2" },
+        "lineComment":    { "fg": "#48433D", "italic": true },
+        "docComment":     { "fg": "#88796C", "italic": true },
+        "blockComment":   { "fg": "#48433D", "italic": true },
+        "string":         { "fg": "#D9735A" },
+        "stringEscape":   { "fg": "#EFA030" },
+        "number":         { "fg": "#A8C98A" },
+        "boolean":        { "fg": "#A8C98A" },
+        "nil":            { "fg": "#A8C98A" },
+        "keywordLit":     { "fg": "#A8C98A" },
+        "charLit":        { "fg": "#A8C98A" },
+        "metadata":       { "fg": "#EFA030" },
+        "quote":          { "fg": "#C4A0E8" },
+        "operator":       { "fg": "#6A5F58" },
+        "define":         { "fg": "#EFA030", "bold": true },
+        "control":        { "fg": "#EFA030", "bold": true },
+        "type":           { "fg": "#7AC4B8" },
+        "effect":         { "fg": "#C4A0E8" },
+        "except":         { "fg": "#EFA030", "bold": true },
+        "special":        { "fg": "#EFA030", "bold": true },
+        "builtin":        { "fg": "#C4A0E8" },
+        "cblock":         { "fg": "#EAE0D2" },
+        "langDir":        { "fg": "#C4A0E8" },
+        "delim":          { "fg": "#5A5448" },
+        "curlyInfix":     { "fg": "#5A5448" },
+        "neotericCall":   { "fg": "#C4A0E8" },
+        "identifier":     { "fg": "#EAE0D2" },
+        "invalid":        { "fg": "#D9735A", "bold": true }
+    }
+}

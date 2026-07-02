@@ -1,0 +1,6 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+    <qresource prefix="/themes">
+        <file alias="turmeric-dark.theme.json">turmeric-dark.theme.json</file>
+    </qresource>
+</RCC>

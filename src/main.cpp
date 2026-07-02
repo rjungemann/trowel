@@ -4,6 +4,10 @@
 #include <QCommandLineParser>
 
 int main(int argc, char** argv) {
+    // Resources are compiled into trowel_lib (a static library); force the
+    // linker to pull in qrc_resources.o so `:/themes/...` is registered.
+    Q_INIT_RESOURCE(resources);
+
     QApplication app(argc, argv);
     QApplication::setApplicationName("Trowel");
     QApplication::setOrganizationName("turmeric");

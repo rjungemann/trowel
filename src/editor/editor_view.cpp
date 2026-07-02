@@ -1,5 +1,8 @@
 #include "editor/editor_view.h"
 
+#include "editor/theme_loader.h"
+#include "editor/turmeric_lexer.h"
+
 #include <ScintillaEdit.h>
 
 #include <QFile>
@@ -26,6 +29,9 @@ EditorView::EditorView(QWidget* parent)
     layout->addWidget(sci_);
 
     applyDefaultStyling();
+
+    sci_->setILexer(reinterpret_cast<sptr_t>(CreateTurmericLexer(false)));
+    ApplyThemeToEditor(sci_, LoadBuiltinDarkTheme());
 
     connect(sci_, &ScintillaEditBase::savePointChanged, this, [this](bool dirty) {
         emit modifiedChanged(dirty);

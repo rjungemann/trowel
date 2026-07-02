@@ -19,17 +19,24 @@ qt_standard_project_setup()
 
 include(${CMAKE_SOURCE_DIR}/cmake/scintilla_qt.cmake)
 
+qt_add_resources(TROWEL_RESOURCES resources/resources.qrc)
+
 add_library(trowel_lib STATIC
     src/app/main_window.cpp
     src/app/main_window.h
     src/editor/editor_view.cpp
     src/editor/editor_view.h
+    src/editor/turmeric_lexer.cpp
+    src/editor/turmeric_lexer.h
+    src/editor/theme_loader.cpp
+    src/editor/theme_loader.h
     src/repl/pty_session.cpp
     src/repl/pty_session.h
     src/repl/terminal_view.cpp
     src/repl/terminal_view.h
     src/repl/repl_session.cpp
     src/repl/repl_session.h
+    ${TROWEL_RESOURCES}
 )
 target_include_directories(trowel_lib PUBLIC src)
 target_link_libraries(trowel_lib PUBLIC Qt6::Widgets scintilla_qt)

@@ -1,6 +1,7 @@
 #include "app/main_window.h"
 
 #include "editor/editor_view.h"
+#include "editor/theme_loader.h"
 #include "repl/repl_session.h"
 #include "repl/terminal_view.h"
 
@@ -43,6 +44,8 @@ void MainWindow::setupUi() {
     splitter_->addWidget(terminal_);
     splitter_->setChildrenCollapsible(false);
     splitter_->setSizes({700, 500});
+
+    ApplyThemeToTerminal(terminal_, LoadBuiltinDarkTheme());
 
     setCentralWidget(splitter_);
     resize(1200, 800);
