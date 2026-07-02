@@ -276,9 +276,17 @@ end)` — same code path, restricted range — so "evaluate selection" is a
 trivial add later.
 
 ### 7.3 Terminal
-- QTermWidget renders, handles scrollback, selection, copy/paste, resize.
-- Colors overridden from the turmeric-dark palette (§6.3).
-- Font matched to the editor's font for visual consistency.
+- **v1 (current):** lightweight `QPlainTextEdit`-based terminal + hand-rolled
+  PTY loop (`forkpty` + `QSocketNotifier`). Strips CSI/OSC escape sequences,
+  honors CR/BS/BEL, forwards keystrokes (including arrows / Ctrl-letter / DEL)
+  to the child. No color rendering yet; adequate for a REPL, not for running
+  `vim` inside. Isolated behind `TerminalView` so the upgrade path stays open.
+- **Future:** swap in QTermWidget (or libvterm-backed widget) when we need
+  full xterm compatibility, SGR colors, scrollback search, etc. Deferred from
+  v1 because QTermWidget is not packaged on Homebrew and its
+  lxqt-build-tools dependency is a heavy yak-shave.
+- Font matched to the editor's font for visual consistency (Iosevka →
+  Menlo fallback).
 
 ---
 

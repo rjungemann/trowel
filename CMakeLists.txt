@@ -17,12 +17,22 @@ find_package(Qt6 REQUIRED COMPONENTS Widgets)
 
 qt_standard_project_setup()
 
+include(${CMAKE_SOURCE_DIR}/cmake/scintilla_qt.cmake)
+
 add_library(trowel_lib STATIC
     src/app/main_window.cpp
     src/app/main_window.h
+    src/editor/editor_view.cpp
+    src/editor/editor_view.h
+    src/repl/pty_session.cpp
+    src/repl/pty_session.h
+    src/repl/terminal_view.cpp
+    src/repl/terminal_view.h
+    src/repl/repl_session.cpp
+    src/repl/repl_session.h
 )
 target_include_directories(trowel_lib PUBLIC src)
-target_link_libraries(trowel_lib PUBLIC Qt6::Widgets)
+target_link_libraries(trowel_lib PUBLIC Qt6::Widgets scintilla_qt)
 target_compile_options(trowel_lib PRIVATE
     -Wall -Wextra -Wpedantic -Werror
 )
