@@ -25,9 +25,12 @@ public:
     void setTurBinary(const QString& path) { turBinary_ = path; }
     QString turBinary() const { return turBinary_; }
 
+    PtySession* pty() const { return pty_; }
+
 signals:
     void started();
     void stopped(int exitCode);
+    void dataReceived(const QByteArray& bytes);
 
 private:
     void onStarted();

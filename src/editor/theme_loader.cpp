@@ -152,12 +152,12 @@ void ApplyThemeToEditor(ScintillaEdit* sci, const Theme& theme) {
     sci->styleSetFore(STYLE_LINENUMBER, bgra(theme.lineNumberFg));
     sci->styleSetBack(STYLE_LINENUMBER, bgra(theme.lineNumberBg));
 
-    // Caret + selection. Caret-line highlight is currently disabled at the
-    // widget level (see EditorView::applyDefaultStyling) — enabling it with an
-    // opaque background can hide text on the caret line depending on layer.
+    // Caret + selection + caret-line highlight.
     sci->setCaretFore(bgra(theme.caret));
     sci->setSelBack(true, bgra(theme.selectionBg));
     sci->setSelAlpha(theme.selectionBg.alpha());
+    sci->setCaretLineBack(bgra(theme.currentLineBg));
+    sci->setCaretLineBackAlpha(48);  // translucent so text on the line stays readable
 
     // Matched brace.
     sci->styleSetFore(STYLE_BRACELIGHT, bgra(theme.matchedBraceFg));

@@ -1,7 +1,9 @@
 #pragma once
 
 #include <QMainWindow>
+#include <QStringList>
 
+class QMenu;
 class QSplitter;
 
 namespace trowel {
@@ -17,6 +19,11 @@ public:
 
     bool openPath(const QString& path);
 
+    EditorView* editorView() const { return editor_; }
+    TerminalView* terminalView() const { return terminal_; }
+    ReplSession* replSession() const { return repl_; }
+    QSplitter* splitter() const { return splitter_; }
+
 protected:
     void closeEvent(QCloseEvent* event) override;
 
@@ -30,6 +37,8 @@ private slots:
     void focusRepl();
     void runBuffer();
     void runSelection();
+    void pickFont();
+    void openRecentFromAction();
 
 private:
     void setupUi();
@@ -40,10 +49,16 @@ private:
     void persistState();
     QString replWorkingDir() const;
 
+    void loadRecentFiles();
+    void rebuildRecentMenu();
+    void rememberRecentFile(const QString& path);
+
     EditorView* editor_;
     TerminalView* terminal_;
     ReplSession* repl_;
     QSplitter* splitter_;
+    QMenu* recentMenu_ = nullptr;
+    QStringList recentFiles_;
 };
 
 }

@@ -2,6 +2,8 @@
 
 #include <QPlainTextEdit>
 
+#include <utility>
+
 namespace trowel {
 
 class PtySession;
@@ -16,6 +18,10 @@ public:
 
     void appendOutput(const QByteArray& bytes);
     void showBanner(const QString& text);
+
+    PtySession* pty() const { return pty_; }
+    QString screenText(int lastLines = -1) const;
+    std::pair<int, int> screenCursor() const;
 
 protected:
     void keyPressEvent(QKeyEvent* event) override;

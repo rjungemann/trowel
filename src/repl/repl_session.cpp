@@ -30,6 +30,7 @@ void ReplSession::start(const QString& workingDir) {
 
     connect(pty_, &PtySession::finished, this, &ReplSession::onFinished);
     connect(pty_, &PtySession::startFailed, this, &ReplSession::onStartFailed);
+    connect(pty_, &PtySession::dataReceived, this, &ReplSession::dataReceived);
 
     const QString resolved = QStandardPaths::findExecutable(turBinary_);
     if (resolved.isEmpty()) {

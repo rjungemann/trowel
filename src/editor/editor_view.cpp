@@ -48,7 +48,10 @@ void EditorView::applyDefaultStyling() {
     sci_->setMarginWidthN(kSymbolMargin, 0);
     sci_->setMarginWidthN(kFoldMargin, 0);
 
-    sci_->setCaretLineVisible(false);
+    sci_->setCaretLineVisible(true);
+    sci_->setCaretLineLayer(SC_LAYER_UNDER_TEXT);
+    // Actual color set by the theme; alpha capped at ~64/255 so text remains
+    // legible on the caret line.
 
     sci_->setUseTabs(false);
     sci_->setTabWidth(2);
@@ -62,6 +65,7 @@ void EditorView::applyDefaultStyling() {
 }
 
 void EditorView::setFont(const QFont& font) {
+    currentFont_ = font;
     const QByteArray family = font.family().toUtf8();
     const int size = font.pointSize() > 0 ? font.pointSize() : 12;
     // Apply font to every style we know about individually. Do NOT use
@@ -136,6 +140,47 @@ std::pair<int, int> EditorView::selectionRange() const {
     const int start = sci_->selectionStart();
     const int end = sci_->selectionEnd();
     return {start, end};
+}
+
+void EditorView::setText(const QByteArray& t) {
+    sci_->setText(t.constData());
+}
+
+int EditorView::cursorPos() const {
+    return static_cast<int>(sci_->currentPos());
+}
+
+int EditorView::anchorPos() const {
+    return static_cast<int>(sci_->anchor());
+}
+
+void EditorView::setCursorPos(int pos) {
+    sci_->gotoPos(pos);
+}
+
+void EditorView::setSelection(int anchor, int caret) {
+    sci_->setSel(anchor, caret);
+}
+
+std::pair<int, int> EditorView::lineColFromPos(int pos) const {
+    const int line = static_cast<int>(sci_->lineFromPosition(pos));
+    const int lineStart = static_cast<int>(sci_->positionFromLine(line));
+    return {line, pos - lineStart};
+}
+
+int EditorView::posFromLineCol(int line, int col) const {
+    const int lineStart = static_cast<int>(sci_->positionFromLine(line));
+    const int lineEnd = static_cast<int>(sci_->lineEndPosition(line));
+    const int p = lineStart + col;
+    return p > lineEnd ? lineEnd : p;
+}
+
+int EditorView::lineCount() const {
+    return static_cast<int>(sci_->lineCount());
+}
+
+int EditorView::styleAt(int pos) const {
+    return static_cast<int>(sci_->styleAt(pos));
 }
 
 void EditorView::setPath(const QString& path) {

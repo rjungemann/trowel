@@ -12,6 +12,8 @@
 #include <QFileInfo>
 #include <QFont>
 #include <QFontDatabase>
+#include <QFontDialog>
+#include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QSettings>
@@ -71,6 +73,9 @@ void MainWindow::setupMenus() {
     openAction->setShortcut(QKeySequence::Open);
     connect(openAction, &QAction::triggered, this, &MainWindow::openFile);
 
+    recentMenu_ = fileMenu->addMenu("Open &Recent");
+    rebuildRecentMenu();
+
     fileMenu->addSeparator();
 
     auto* saveAction = fileMenu->addAction("&Save");
@@ -88,7 +93,11 @@ void MainWindow::setupMenus() {
     connect(quitAction, &QAction::triggered, this, &QMainWindow::close);
 
     menuBar()->addMenu("&Edit");
-    menuBar()->addMenu("&View");
+
+    auto* viewMenu = menuBar()->addMenu("&View");
+    auto* fontAction = viewMenu->addAction("&Font…");
+    fontAction->setShortcut(QKeySequence("Ctrl+,"));
+    connect(fontAction, &QAction::triggered, this, &MainWindow::pickFont);
 
     auto* runMenu = menuBar()->addMenu("&Run");
 
@@ -123,7 +132,69 @@ bool MainWindow::openPath(const QString& path) {
         QMessageBox::warning(this, "Trowel", QString("Could not open %1").arg(path));
         return false;
     }
+    rememberRecentFile(path);
     return true;
+}
+
+void MainWindow::rememberRecentFile(const QString& path) {
+    if (path.isEmpty()) return;
+    const QString abs = QFileInfo(path).absoluteFilePath();
+    recentFiles_.removeAll(abs);
+    recentFiles_.prepend(abs);
+    while (recentFiles_.size() > 8) recentFiles_.removeLast();
+    rebuildRecentMenu();
+}
+
+void MainWindow::rebuildRecentMenu() {
+    if (!recentMenu_) return;
+    recentMenu_->clear();
+    if (recentFiles_.isEmpty()) {
+        auto* empty = recentMenu_->addAction("(no recent files)");
+        empty->setEnabled(false);
+        return;
+    }
+    for (const QString& path : recentFiles_) {
+        auto* a = recentMenu_->addAction(QFileInfo(path).fileName());
+        a->setToolTip(path);
+        a->setData(path);
+        connect(a, &QAction::triggered, this, &MainWindow::openRecentFromAction);
+    }
+    recentMenu_->addSeparator();
+    auto* clear = recentMenu_->addAction("Clear Menu");
+    connect(clear, &QAction::triggered, this, [this]{
+        recentFiles_.clear();
+        rebuildRecentMenu();
+    });
+}
+
+void MainWindow::openRecentFromAction() {
+    auto* a = qobject_cast<QAction*>(sender());
+    if (!a) return;
+    const QString path = a->data().toString();
+    if (path.isEmpty()) return;
+    if (!QFileInfo::exists(path)) {
+        recentFiles_.removeAll(path);
+        rebuildRecentMenu();
+        statusBar()->showMessage(QString("File no longer exists: %1").arg(path), 4000);
+        return;
+    }
+    openPath(path);
+}
+
+void MainWindow::loadRecentFiles() {
+    QSettings settings;
+    recentFiles_ = settings.value("recentFiles").toStringList();
+    while (recentFiles_.size() > 8) recentFiles_.removeLast();
+    rebuildRecentMenu();
+}
+
+void MainWindow::pickFont() {
+    bool ok = false;
+    const QFont chosen = QFontDialog::getFont(&ok, editor_->currentFont(), this,
+                                              "Editor Font");
+    if (!ok) return;
+    editor_->setFont(chosen);
+    QSettings().setValue("editorFont", chosen);
 }
 
 void MainWindow::newFile() {
@@ -140,6 +211,7 @@ void MainWindow::openFile() {
     if (path.isEmpty()) return;
     if (openPath(path)) {
         settings.setValue("lastOpenDir", QFileInfo(path).absolutePath());
+        settings.setValue("lastFile", QFileInfo(path).absoluteFilePath());
     }
 }
 
@@ -164,6 +236,8 @@ bool MainWindow::saveAs() {
         return false;
     }
     settings.setValue("lastOpenDir", QFileInfo(path).absolutePath());
+    settings.setValue("lastFile", QFileInfo(path).absoluteFilePath());
+    rememberRecentFile(path);
     return true;
 }
 
@@ -242,12 +316,18 @@ void MainWindow::restoreState() {
     const QString preferred = QFontDatabase::hasFamily("Iosevka") ? "Iosevka" : "Menlo";
     QFont font = settings.value("editorFont", QFont(preferred, 12)).value<QFont>();
     editor_->setFont(font);
+    loadRecentFiles();
 }
 
 void MainWindow::persistState() {
     QSettings settings;
     settings.setValue("geometry", saveGeometry());
     settings.setValue("splitterState", splitter_->saveState());
+    settings.setValue("editorFont", editor_->currentFont());
+    settings.setValue("recentFiles", recentFiles_);
+    if (!editor_->filePath().isEmpty()) {
+        settings.setValue("lastFile", editor_->filePath());
+    }
 }
 
 }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QFont>
 #include <QString>
 #include <QWidget>
 
@@ -26,6 +27,19 @@ public:
     std::pair<int, int> selectionRange() const;
 
     void setFont(const QFont& font);
+    QFont currentFont() const { return currentFont_; }
+
+    // Control API surface.
+    ScintillaEdit* sciWidget() const { return sci_; }
+    void setText(const QByteArray& text);
+    int cursorPos() const;
+    int anchorPos() const;
+    void setCursorPos(int pos);
+    void setSelection(int anchor, int caret);
+    std::pair<int, int> lineColFromPos(int pos) const;
+    int posFromLineCol(int line, int col) const;
+    int lineCount() const;
+    int styleAt(int pos) const;
 
 signals:
     void modifiedChanged(bool modified);
@@ -37,6 +51,7 @@ private:
 
     ScintillaEdit* sci_;
     QString path_;
+    QFont currentFont_;
 };
 
 }

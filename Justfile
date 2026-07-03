@@ -25,6 +25,10 @@ run: build
 run-offscreen: build
     {{bin}} -platform offscreen
 
+# Run the smoke test suite (pytest under offscreen Qt)
+smoke: build
+    cd tests/smoke && pytest -q
+
 # Delete the current preset's build directory
 clean:
     rm -rf {{build_dir}}

@@ -13,7 +13,7 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Network)
 
 qt_standard_project_setup()
 
@@ -38,10 +38,16 @@ add_library(trowel_lib STATIC
     src/repl/repl_session.h
     src/repl/run_buffer.cpp
     src/repl/run_buffer.h
+    src/control/control_server.cpp
+    src/control/control_server.h
+    src/control/control_connection.cpp
+    src/control/control_connection.h
+    src/control/control_handlers.cpp
+    src/control/control_handlers.h
     ${TROWEL_RESOURCES}
 )
 target_include_directories(trowel_lib PUBLIC src)
-target_link_libraries(trowel_lib PUBLIC Qt6::Widgets scintilla_qt)
+target_link_libraries(trowel_lib PUBLIC Qt6::Widgets Qt6::Network scintilla_qt)
 target_compile_options(trowel_lib PRIVATE
     -Wall -Wextra -Wpedantic -Werror
 )

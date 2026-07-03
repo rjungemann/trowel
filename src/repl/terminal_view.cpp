@@ -158,6 +158,26 @@ void TerminalView::appendOutput(const QByteArray& bytes) {
     insertProcessedText(bytes);
 }
 
+QString TerminalView::screenText(int lastLines) const {
+    const QString all = toPlainText();
+    if (lastLines <= 0) return all;
+    int idx = all.size();
+    int lines = 0;
+    while (idx > 0 && lines < lastLines) {
+        --idx;
+        if (all[idx] == QChar('\n')) {
+            ++lines;
+            if (lines == lastLines) { ++idx; break; }
+        }
+    }
+    return all.mid(idx);
+}
+
+std::pair<int, int> TerminalView::screenCursor() const {
+    QTextCursor c = textCursor();
+    return {c.blockNumber(), c.positionInBlock()};
+}
+
 void TerminalView::keyPressEvent(QKeyEvent* event) {
     if (!pty_ || !pty_->isRunning()) {
         QPlainTextEdit::keyPressEvent(event);
