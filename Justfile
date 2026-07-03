@@ -21,6 +21,8 @@ rebuild: clean build
 run: build
     {{bin}}
 
+editor: run
+
 # Run headless (offscreen Qt platform) — useful for smoke tests
 run-offscreen: build
     {{bin}} -platform offscreen
