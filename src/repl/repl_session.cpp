@@ -58,6 +58,14 @@ void ReplSession::stop() {
     pty_->terminate();
 }
 
+bool ReplSession::sendCommand(const QByteArray& line) {
+    if (!isRunning()) return false;
+    QByteArray payload = line;
+    if (!payload.endsWith('\r') && !payload.endsWith('\n')) payload.append('\r');
+    pty_->write(payload);
+    return true;
+}
+
 void ReplSession::onStarted() {
     view_->showBanner(QString("[trowel] %1 repl started").arg(turBinary_));
     emit started();

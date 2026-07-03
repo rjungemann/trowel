@@ -48,9 +48,7 @@ void EditorView::applyDefaultStyling() {
     sci_->setMarginWidthN(kSymbolMargin, 0);
     sci_->setMarginWidthN(kFoldMargin, 0);
 
-    sci_->setCaretLineVisible(true);
-    sci_->setCaretLineBack(0xEEEEEE);
-    sci_->setCaretLineBackAlpha(64);
+    sci_->setCaretLineVisible(false);
 
     sci_->setUseTabs(false);
     sci_->setTabWidth(2);
@@ -65,9 +63,18 @@ void EditorView::applyDefaultStyling() {
 
 void EditorView::setFont(const QFont& font) {
     const QByteArray family = font.family().toUtf8();
+    const int size = font.pointSize() > 0 ? font.pointSize() : 12;
+    // Apply font to every style we know about individually. Do NOT use
+    // styleClearAll — that would copy STYLE_DEFAULT to all styles and wipe the
+    // per-style foreground colors installed by ApplyThemeToEditor.
     sci_->styleSetFont(STYLE_DEFAULT, family.constData());
-    sci_->styleSetSize(STYLE_DEFAULT, font.pointSize() > 0 ? font.pointSize() : 12);
-    sci_->styleClearAll();
+    sci_->styleSetSize(STYLE_DEFAULT, size);
+    sci_->styleSetFont(STYLE_LINENUMBER, family.constData());
+    sci_->styleSetSize(STYLE_LINENUMBER, size);
+    for (int s = 0; s < static_cast<int>(TurStyle::Count); ++s) {
+        sci_->styleSetFont(s, family.constData());
+        sci_->styleSetSize(s, size);
+    }
 }
 
 bool EditorView::loadFile(const QString& path) {
@@ -112,6 +119,23 @@ bool EditorView::isModified() const {
 
 bool EditorView::isEmpty() const {
     return sci_->textLength() == 0;
+}
+
+QByteArray EditorView::text() const {
+    QByteArray raw = sci_->getText(sci_->textLength() + 1);
+    if (raw.endsWith('\0')) raw.chop(1);
+    return raw;
+}
+
+QByteArray EditorView::textInRange(int startPos, int endPos) const {
+    if (endPos <= startPos) return {};
+    return sci_->textRange(startPos, endPos);
+}
+
+std::pair<int, int> EditorView::selectionRange() const {
+    const int start = sci_->selectionStart();
+    const int end = sci_->selectionEnd();
+    return {start, end};
 }
 
 void EditorView::setPath(const QString& path) {

@@ -18,6 +18,10 @@ public:
     void stop();
     bool isRunning() const;
 
+    // Write `line` (a UTF-8 string) followed by \r to the REPL. Returns false
+    // if the REPL isn't running.
+    bool sendCommand(const QByteArray& line);
+
     void setTurBinary(const QString& path) { turBinary_ = path; }
     QString turBinary() const { return turBinary_; }
 

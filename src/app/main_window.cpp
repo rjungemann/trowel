@@ -3,6 +3,7 @@
 #include "editor/editor_view.h"
 #include "editor/theme_loader.h"
 #include "repl/repl_session.h"
+#include "repl/run_buffer.h"
 #include "repl/terminal_view.h"
 
 #include <QAction>
@@ -15,6 +16,7 @@
 #include <QMessageBox>
 #include <QSettings>
 #include <QSplitter>
+#include <QStatusBar>
 
 namespace trowel {
 
@@ -90,7 +92,17 @@ void MainWindow::setupMenus() {
 
     auto* runMenu = menuBar()->addMenu("&Run");
 
-    auto* restartAction = runMenu->addAction("&Restart REPL");
+    auto* runBufferAction = runMenu->addAction("&Run Buffer");
+    runBufferAction->setShortcut(QKeySequence("Ctrl+R"));
+    connect(runBufferAction, &QAction::triggered, this, &MainWindow::runBuffer);
+
+    auto* runSelectionAction = runMenu->addAction("Run &Selection");
+    runSelectionAction->setShortcut(QKeySequence("Ctrl+Shift+E"));
+    connect(runSelectionAction, &QAction::triggered, this, &MainWindow::runSelection);
+
+    runMenu->addSeparator();
+
+    auto* restartAction = runMenu->addAction("Res&tart REPL");
     restartAction->setShortcut(QKeySequence("Ctrl+Shift+R"));
     connect(restartAction, &QAction::triggered, this, &MainWindow::restartRepl);
 
@@ -100,7 +112,7 @@ void MainWindow::setupMenus() {
     focusEditorAction->setShortcut(QKeySequence("Ctrl+E"));
     connect(focusEditorAction, &QAction::triggered, this, &MainWindow::focusEditor);
 
-    auto* focusReplAction = runMenu->addAction("Focus &REPL");
+    auto* focusReplAction = runMenu->addAction("Focus RE&PL");
     focusReplAction->setShortcut(QKeySequence("Ctrl+T"));
     connect(focusReplAction, &QAction::triggered, this, &MainWindow::focusRepl);
 }
@@ -157,6 +169,21 @@ bool MainWindow::saveAs() {
 
 void MainWindow::restartRepl() {
     repl_->restart(replWorkingDir());
+}
+
+void MainWindow::runBuffer() {
+    const RunResult r = RunBuffer(editor_, repl_);
+    if (!r.ok) {
+        statusBar()->showMessage(r.message, 4000);
+    }
+}
+
+void MainWindow::runSelection() {
+    const auto [start, end] = editor_->selectionRange();
+    const RunResult r = RunRange(editor_, repl_, start, end);
+    if (!r.ok) {
+        statusBar()->showMessage(r.message, 4000);
+    }
 }
 
 void MainWindow::focusEditor() {

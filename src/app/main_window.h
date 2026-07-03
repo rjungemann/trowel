@@ -28,6 +28,8 @@ private slots:
     void restartRepl();
     void focusEditor();
     void focusRepl();
+    void runBuffer();
+    void runSelection();
 
 private:
     void setupUi();

@@ -3,6 +3,8 @@
 #include <QString>
 #include <QWidget>
 
+#include <utility>
+
 class ScintillaEdit;
 
 namespace trowel {
@@ -19,6 +21,9 @@ public:
     QString filePath() const { return path_; }
     bool isModified() const;
     bool isEmpty() const;
+    QByteArray text() const;
+    QByteArray textInRange(int startPos, int endPos) const;
+    std::pair<int, int> selectionRange() const;
 
     void setFont(const QFont& font);
 

@@ -9,6 +9,8 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QPalette>
+#include <QWidget>
 
 namespace trowel {
 
@@ -120,6 +122,21 @@ Theme LoadBuiltinDarkTheme() {
 }
 
 void ApplyThemeToEditor(ScintillaEdit* sci, const Theme& theme) {
+    // Force the widget palette (Active + Inactive + Disabled) to match the
+    // theme background. Without this, macOS swaps a system Base color under
+    // the viewport when focus changes and any transparent Scintilla styling
+    // lets it bleed through — that's what caused "black on black when focused,
+    // fine when unfocused".
+    QPalette p = sci->palette();
+    for (auto group : {QPalette::Active, QPalette::Inactive, QPalette::Disabled}) {
+        p.setColor(group, QPalette::Base,       theme.editorBg);
+        p.setColor(group, QPalette::Window,     theme.editorBg);
+        p.setColor(group, QPalette::Text,       theme.editorFg);
+        p.setColor(group, QPalette::WindowText, theme.editorFg);
+    }
+    sci->setPalette(p);
+    if (auto* vp = sci->viewport()) vp->setPalette(p);
+
     // Base default style — set fg/bg, then styleClearAll so unset styles inherit.
     sci->styleSetFore(STYLE_DEFAULT, bgra(theme.editorFg));
     sci->styleSetBack(STYLE_DEFAULT, bgra(theme.editorBg));
@@ -135,12 +152,12 @@ void ApplyThemeToEditor(ScintillaEdit* sci, const Theme& theme) {
     sci->styleSetFore(STYLE_LINENUMBER, bgra(theme.lineNumberFg));
     sci->styleSetBack(STYLE_LINENUMBER, bgra(theme.lineNumberBg));
 
-    // Caret + selection + current line.
+    // Caret + selection. Caret-line highlight is currently disabled at the
+    // widget level (see EditorView::applyDefaultStyling) — enabling it with an
+    // opaque background can hide text on the caret line depending on layer.
     sci->setCaretFore(bgra(theme.caret));
     sci->setSelBack(true, bgra(theme.selectionBg));
     sci->setSelAlpha(theme.selectionBg.alpha());
-    sci->setCaretLineBack(bgra(theme.currentLineBg));
-    sci->setCaretLineBackAlpha(theme.currentLineBg.alpha() == 0 ? 40 : theme.currentLineBg.alpha());
 
     // Matched brace.
     sci->styleSetFore(STYLE_BRACELIGHT, bgra(theme.matchedBraceFg));

@@ -36,6 +36,8 @@ add_library(trowel_lib STATIC
     src/repl/terminal_view.h
     src/repl/repl_session.cpp
     src/repl/repl_session.h
+    src/repl/run_buffer.cpp
+    src/repl/run_buffer.h
     ${TROWEL_RESOURCES}
 )
 target_include_directories(trowel_lib PUBLIC src)
