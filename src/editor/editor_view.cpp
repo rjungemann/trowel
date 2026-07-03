@@ -25,7 +25,7 @@ EditorView::EditorView(QWidget* parent)
     , sci_(new ScintillaEdit(this))
 {
     auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setContentsMargins(0, 4, 0, 0);
     layout->addWidget(sci_);
 
     applyDefaultStyling();
