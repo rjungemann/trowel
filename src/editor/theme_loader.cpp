@@ -136,6 +136,10 @@ void ApplyThemeToEditor(ScintillaEdit* sci, const Theme& theme) {
     }
     sci->setPalette(p);
     if (auto* vp = sci->viewport()) vp->setPalette(p);
+    if (auto* parent = sci->parentWidget()) {
+        parent->setAutoFillBackground(true);
+        parent->setPalette(p);
+    }
 
     // Base default style — set fg/bg, then styleClearAll so unset styles inherit.
     sci->styleSetFore(STYLE_DEFAULT, bgra(theme.editorFg));

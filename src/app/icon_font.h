@@ -14,7 +14,7 @@ QString RegisterNerdFont();
 // https://www.nerdfonts.com/cheat-sheet — verify at bump time.
 namespace NF {
 constexpr char32_t Play         = 0xF040A; // nf-md-play
-constexpr char32_t PlaylistPlay = 0xF0CAB; // nf-md-playlist_play
+constexpr char32_t PlaylistPlay = 0xF0411; // nf-md-playlist_play
 }
 
 // Rasterize a Nerd Font glyph into a QIcon. Cached by (codepoint, size, color).
