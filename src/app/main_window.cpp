@@ -144,7 +144,8 @@ void MainWindow::setupToolBar() {
     // panes underneath. Height clamped at ~32px via a stylesheet.
     const Theme theme = LoadBuiltinDarkTheme();
     toolBar_->setStyleSheet(QString(
-        "QToolBar { background: %1; border: none; padding: 4px 6px; spacing: 6px; }"
+        "QToolBar { background: %1; border: none; border-bottom: 1px solid %2;"
+        "           padding: 4px 6px; spacing: 6px; }"
         "QToolBar::separator { background: %2; width: 1px; margin: 4px 2px; }"
     ).arg(theme.editorBg.name(), theme.lineNumberFg.name()));
 
