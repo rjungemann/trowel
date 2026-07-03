@@ -3,8 +3,10 @@
 #include <QMainWindow>
 #include <QStringList>
 
+class QAction;
 class QMenu;
 class QSplitter;
+class QToolBar;
 
 namespace trowel {
 
@@ -43,6 +45,7 @@ private slots:
 private:
     void setupUi();
     void setupMenus();
+    void setupToolBar();
     void updateWindowTitle();
     bool maybeSave();
     void restoreState();
@@ -58,6 +61,9 @@ private:
     ReplSession* repl_;
     QSplitter* splitter_;
     QMenu* recentMenu_ = nullptr;
+    QToolBar* toolBar_ = nullptr;
+    QAction* runBufferAction_ = nullptr;
+    QAction* runSelectionAction_ = nullptr;
     QStringList recentFiles_;
 };
 

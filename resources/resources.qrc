@@ -3,4 +3,7 @@
     <qresource prefix="/themes">
         <file alias="turmeric-dark.theme.json">turmeric-dark.theme.json</file>
     </qresource>
+    <qresource prefix="/fonts">
+        <file alias="SymbolsNerdFont-Regular.ttf">fonts/SymbolsNerdFont-Regular.ttf</file>
+    </qresource>
 </RCC>

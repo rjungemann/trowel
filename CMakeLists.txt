@@ -22,6 +22,8 @@ include(${CMAKE_SOURCE_DIR}/cmake/scintilla_qt.cmake)
 qt_add_resources(TROWEL_RESOURCES resources/resources.qrc)
 
 add_library(trowel_lib STATIC
+    src/app/icon_font.cpp
+    src/app/icon_font.h
     src/app/main_window.cpp
     src/app/main_window.h
     src/editor/editor_view.cpp

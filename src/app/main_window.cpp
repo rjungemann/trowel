@@ -1,5 +1,6 @@
 #include "app/main_window.h"
 
+#include "app/icon_font.h"
 #include "editor/editor_view.h"
 #include "editor/theme_loader.h"
 #include "repl/repl_session.h"
@@ -19,6 +20,7 @@
 #include <QSettings>
 #include <QSplitter>
 #include <QStatusBar>
+#include <QToolBar>
 
 namespace trowel {
 
@@ -31,6 +33,7 @@ MainWindow::MainWindow(QWidget* parent)
 {
     setupUi();
     setupMenus();
+    setupToolBar();
     restoreState();
     updateWindowTitle();
 
@@ -101,13 +104,17 @@ void MainWindow::setupMenus() {
 
     auto* runMenu = menuBar()->addMenu("&Run");
 
-    auto* runBufferAction = runMenu->addAction("&Run Buffer");
-    runBufferAction->setShortcut(QKeySequence("Ctrl+R"));
-    connect(runBufferAction, &QAction::triggered, this, &MainWindow::runBuffer);
+    runBufferAction_ = new QAction("&Run Buffer", this);
+    runBufferAction_->setShortcut(QKeySequence("Ctrl+R"));
+    runBufferAction_->setToolTip("Evaluate File");
+    connect(runBufferAction_, &QAction::triggered, this, &MainWindow::runBuffer);
+    runMenu->addAction(runBufferAction_);
 
-    auto* runSelectionAction = runMenu->addAction("Run &Selection");
-    runSelectionAction->setShortcut(QKeySequence("Ctrl+Shift+E"));
-    connect(runSelectionAction, &QAction::triggered, this, &MainWindow::runSelection);
+    runSelectionAction_ = new QAction("Run &Selection", this);
+    runSelectionAction_->setShortcut(QKeySequence("Ctrl+Shift+E"));
+    runSelectionAction_->setToolTip("Evaluate Selection");
+    connect(runSelectionAction_, &QAction::triggered, this, &MainWindow::runSelection);
+    runMenu->addAction(runSelectionAction_);
 
     runMenu->addSeparator();
 
@@ -124,6 +131,34 @@ void MainWindow::setupMenus() {
     auto* focusReplAction = runMenu->addAction("Focus RE&PL");
     focusReplAction->setShortcut(QKeySequence("Ctrl+T"));
     connect(focusReplAction, &QAction::triggered, this, &MainWindow::focusRepl);
+}
+
+void MainWindow::setupToolBar() {
+    toolBar_ = addToolBar("Main");
+    toolBar_->setObjectName("MainToolBar");
+    toolBar_->setMovable(false);
+    toolBar_->setFloatable(false);
+    toolBar_->setIconSize(QSize(18, 18));
+    toolBar_->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    // Give the toolbar the theme background so it visually merges with the
+    // panes underneath. Height clamped at ~32px via a stylesheet.
+    const Theme theme = LoadBuiltinDarkTheme();
+    toolBar_->setStyleSheet(QString(
+        "QToolBar { background: %1; border: none; padding: 4px 6px; spacing: 6px; }"
+        "QToolBar::separator { background: %2; width: 1px; margin: 4px 2px; }"
+    ).arg(theme.editorBg.name(), theme.lineNumberFg.name()));
+
+    const QColor iconColor = theme.editorFg;
+    const int glyphSize = 18;
+
+    if (runBufferAction_) {
+        runBufferAction_->setIcon(NerdIcon(NF::Play, glyphSize, iconColor));
+        toolBar_->addAction(runBufferAction_);
+    }
+    if (runSelectionAction_) {
+        runSelectionAction_->setIcon(NerdIcon(NF::PlaylistPlay, glyphSize, iconColor));
+        toolBar_->addAction(runSelectionAction_);
+    }
 }
 
 bool MainWindow::openPath(const QString& path) {
