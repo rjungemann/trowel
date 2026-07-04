@@ -160,6 +160,31 @@ void MainWindow::setupToolBar() {
         runSelectionAction_->setIcon(NerdIcon(NF::PlaylistPlay, glyphSize, iconColor));
         toolBar_->addAction(runSelectionAction_);
     }
+
+    toolBar_->addSeparator();
+
+    toggleSplitAction_ = new QAction("Toggle Split Orientation", this);
+    toggleSplitAction_->setToolTip("Toggle REPL position (right / below)");
+    toggleSplitAction_->setIcon(NerdIcon(NF::ViewSplitHorizontal, glyphSize, iconColor));
+    connect(toggleSplitAction_, &QAction::triggered, this, &MainWindow::toggleSplitOrientation);
+    toolBar_->addAction(toggleSplitAction_);
+}
+
+void MainWindow::toggleSplitOrientation() {
+    if (!splitter_) return;
+    const bool wasHorizontal = splitter_->orientation() == Qt::Horizontal;
+    splitter_->setOrientation(wasHorizontal ? Qt::Vertical : Qt::Horizontal);
+    if (toggleSplitAction_) {
+        const QColor iconColor = LoadBuiltinDarkTheme().editorFg;
+        const char32_t glyph = wasHorizontal ? NF::ViewSplitVertical : NF::ViewSplitHorizontal;
+        toggleSplitAction_->setIcon(NerdIcon(glyph, 18, iconColor));
+    }
+    // Reset sizes so the new orientation gets a sensible split.
+    const int total = wasHorizontal ? splitter_->height() : splitter_->width();
+    if (total > 0) {
+        const int first = static_cast<int>(total * 0.58);
+        splitter_->setSizes({first, total - first});
+    }
 }
 
 bool MainWindow::openPath(const QString& path) {
