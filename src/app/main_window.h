@@ -15,9 +15,11 @@ class QToolBar;
 
 namespace trowel {
 
+class DirectoryView;
 class EditorView;
 class ReplSession;
 class TabBar;
+class TabContent;
 class TerminalView;
 
 class MainWindow : public QMainWindow {
@@ -27,6 +29,7 @@ public:
     ~MainWindow() override;
 
     bool openPath(const QString& path);
+    bool openDirectory(const QString& path);
 
     EditorView* editorView() const;
     TerminalView* terminalView() const { return terminal_; }
@@ -39,6 +42,7 @@ protected:
 private slots:
     void newFile();
     void openFile();
+    void openDirectoryDialog();
     bool save();
     bool saveAs();
     void restartRepl();
@@ -56,7 +60,7 @@ private slots:
 
 private:
     struct Buffer {
-        EditorView* view = nullptr;
+        TabContent* view = nullptr;
         QString displayName;
         int untitledIndex = 0;
     };
@@ -75,7 +79,9 @@ private:
     void rebuildRecentMenu();
     void rememberRecentFile(const QString& path);
 
-    int indexOfView(EditorView* v) const;
+    int indexOfView(TabContent* v) const;
+    bool replaceBufferWithFile(int index, const QString& path);
+    void updateEditorActionsEnabled();
     int nextUntitledIndex() const;
     void refreshTabBar();
     QString computeDisplayName(const Buffer& buf) const;
@@ -103,6 +109,9 @@ private:
     QAction* restartReplAction_ = nullptr;
     QAction* toggleSplitAction_ = nullptr;
     QAction* toggleReplAction_ = nullptr;
+    QAction* saveAction_ = nullptr;
+    QAction* saveAsAction_ = nullptr;
+    QAction* pickFontAction_ = nullptr;
     QStringList recentFiles_;
     QFont editorFont_;
 };

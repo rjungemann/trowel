@@ -21,7 +21,7 @@ constexpr int kFoldMargin = 2;
 }
 
 EditorView::EditorView(QWidget* parent)
-    : QWidget(parent)
+    : TabContent(parent)
     , sci_(new ScintillaEdit(this))
 {
     auto* layout = new QVBoxLayout(this);
@@ -120,6 +120,11 @@ bool EditorView::saveFile(const QString& path) {
 bool EditorView::saveCurrent() {
     if (path_.isEmpty()) return false;
     return saveFile(path_);
+}
+
+QString EditorView::displayName() const {
+    if (!path_.isEmpty()) return QFileInfo(path_).fileName();
+    return {};
 }
 
 bool EditorView::isModified() const {

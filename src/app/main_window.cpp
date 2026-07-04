@@ -1,7 +1,9 @@
 #include "app/main_window.h"
 
+#include "app/directory_view.h"
 #include "app/icon_font.h"
 #include "app/tab_bar.h"
+#include "app/tab_content.h"
 #include "editor/editor_view.h"
 #include "editor/theme_loader.h"
 #include "repl/repl_session.h"
@@ -51,7 +53,9 @@ MainWindow::~MainWindow() = default;
 
 EditorView* MainWindow::editorView() const {
     if (activeIndex_ < 0 || activeIndex_ >= static_cast<int>(buffers_.size())) return nullptr;
-    return buffers_[activeIndex_]->view;
+    TabContent* v = buffers_[activeIndex_]->view;
+    if (!v || v->kind() != TabContent::Kind::Editor) return nullptr;
+    return static_cast<EditorView*>(v);
 }
 
 void MainWindow::setupUi() {
@@ -102,18 +106,22 @@ void MainWindow::setupMenus() {
     openAction->setShortcut(QKeySequence::Open);
     connect(openAction, &QAction::triggered, this, &MainWindow::openFile);
 
+    auto* openDirAction = fileMenu->addAction("Open &Directory…");
+    openDirAction->setShortcut(QKeySequence("Ctrl+Shift+O"));
+    connect(openDirAction, &QAction::triggered, this, &MainWindow::openDirectoryDialog);
+
     recentMenu_ = fileMenu->addMenu("Open &Recent");
     rebuildRecentMenu();
 
     fileMenu->addSeparator();
 
-    auto* saveAction = fileMenu->addAction("&Save");
-    saveAction->setShortcut(QKeySequence::Save);
-    connect(saveAction, &QAction::triggered, this, [this]{ save(); });
+    saveAction_ = fileMenu->addAction("&Save");
+    saveAction_->setShortcut(QKeySequence::Save);
+    connect(saveAction_, &QAction::triggered, this, [this]{ save(); });
 
-    auto* saveAsAction = fileMenu->addAction("Save &As…");
-    saveAsAction->setShortcut(QKeySequence::SaveAs);
-    connect(saveAsAction, &QAction::triggered, this, [this]{ saveAs(); });
+    saveAsAction_ = fileMenu->addAction("Save &As…");
+    saveAsAction_->setShortcut(QKeySequence::SaveAs);
+    connect(saveAsAction_, &QAction::triggered, this, [this]{ saveAs(); });
 
     fileMenu->addSeparator();
 
@@ -130,9 +138,9 @@ void MainWindow::setupMenus() {
     menuBar()->addMenu("&Edit");
 
     auto* viewMenu = menuBar()->addMenu("&View");
-    auto* fontAction = viewMenu->addAction("&Font…");
-    fontAction->setShortcut(QKeySequence("Ctrl+,"));
-    connect(fontAction, &QAction::triggered, this, &MainWindow::pickFont);
+    pickFontAction_ = viewMenu->addAction("&Font…");
+    pickFontAction_->setShortcut(QKeySequence("Ctrl+,"));
+    connect(pickFontAction_, &QAction::triggered, this, &MainWindow::pickFont);
 
     viewMenu->addSeparator();
     auto* nextTabAction = viewMenu->addAction("Ne&xt Tab");
@@ -250,7 +258,7 @@ int MainWindow::nextUntitledIndex() const {
     return max + 1;
 }
 
-int MainWindow::indexOfView(EditorView* v) const {
+int MainWindow::indexOfView(TabContent* v) const {
     for (int i = 0; i < static_cast<int>(buffers_.size()); ++i) {
         if (buffers_[i]->view == v) return i;
     }
@@ -258,7 +266,11 @@ int MainWindow::indexOfView(EditorView* v) const {
 }
 
 QString MainWindow::computeDisplayName(const Buffer& buf) const {
-    if (!buf.view->filePath().isEmpty()) {
+    if (buf.view && buf.view->kind() == TabContent::Kind::Directory) {
+        const QString name = buf.view->displayName();
+        return name.isEmpty() ? QStringLiteral("Directory") : name;
+    }
+    if (buf.view && !buf.view->filePath().isEmpty()) {
         return QFileInfo(buf.view->filePath()).fileName();
     }
     if (buf.untitledIndex <= 1) return "Untitled";
@@ -277,39 +289,55 @@ void MainWindow::refreshTabBar() {
     for (const auto& b : buffers_) names.append(b->displayName);
     tabBar_->setTabs(names, activeIndex_);
     for (int i = 0; i < static_cast<int>(buffers_.size()); ++i) {
-        tabBar_->setModified(i, buffers_[i]->view->isModified());
-        tabBar_->setTooltip(i, buffers_[i]->view->filePath());
+        TabContent* v = buffers_[i]->view;
+        tabBar_->setModified(i, v && v->isModified());
+        tabBar_->setTooltip(i, v ? v->filePath() : QString());
     }
 }
 
 void MainWindow::connectBufferSignals(int index) {
-    EditorView* view = buffers_[index]->view;
-    connect(view, &EditorView::modifiedChanged, this, [this, view](bool modified) {
+    TabContent* view = buffers_[index]->view;
+    connect(view, &TabContent::modifiedChanged, this, [this, view](bool modified) {
         const int i = indexOfView(view);
         if (i < 0) return;
         if (tabBar_) tabBar_->setModified(i, modified);
         if (i == activeIndex_) updateWindowTitle();
     });
-    connect(view, &EditorView::filePathChanged, this, [this, view](const QString&) {
+    connect(view, &TabContent::filePathChanged, this, [this, view](const QString&) {
         const int i = indexOfView(view);
         if (i < 0) return;
         updateBufferDisplayName(i);
         if (i == activeIndex_) updateWindowTitle();
     });
+    connect(view, &TabContent::displayNameChanged, this, [this, view]() {
+        const int i = indexOfView(view);
+        if (i < 0) return;
+        updateBufferDisplayName(i);
+        if (i == activeIndex_) updateWindowTitle();
+    });
+    if (view->kind() == TabContent::Kind::Directory) {
+        auto* dv = static_cast<DirectoryView*>(view);
+        connect(dv, &DirectoryView::fileActivated, this, [this, view](const QString& path) {
+            const int i = indexOfView(view);
+            if (i < 0) return;
+            replaceBufferWithFile(i, path);
+        });
+    }
 }
 
 MainWindow::Buffer* MainWindow::addBuffer(const QString& path, bool untitledIfEmpty) {
     auto buf = std::make_unique<Buffer>();
-    buf->view = new EditorView(editorStack_);
-    buf->view->setFont(editorFont_);
+    auto* editor = new EditorView(editorStack_);
+    editor->setFont(editorFont_);
     if (!path.isEmpty()) {
-        if (!buf->view->loadFile(path)) {
-            delete buf->view;
+        if (!editor->loadFile(path)) {
+            delete editor;
             return nullptr;
         }
     } else if (untitledIfEmpty) {
         buf->untitledIndex = nextUntitledIndex();
     }
+    buf->view = editor;
     editorStack_->addWidget(buf->view);
     buf->displayName = computeDisplayName(*buf);
     buffers_.push_back(std::move(buf));
@@ -324,11 +352,13 @@ void MainWindow::activateBuffer(int index) {
     editorStack_->setCurrentWidget(buffers_[index]->view);
     if (tabBar_) tabBar_->setActive(index);
     updateWindowTitle();
+    updateEditorActionsEnabled();
 }
 
 bool MainWindow::maybeSaveBuffer(int index) {
     if (index < 0 || index >= static_cast<int>(buffers_.size())) return true;
-    EditorView* v = buffers_[index]->view;
+    TabContent* v = buffers_[index]->view;
+    if (!v || v->kind() != TabContent::Kind::Editor) return true;
     if (!v->isModified()) return true;
     activateBuffer(index);
     const auto choice = QMessageBox::question(
@@ -353,9 +383,9 @@ void MainWindow::closeBuffer(int index) {
     if (index < 0 || index >= static_cast<int>(buffers_.size())) return;
     if (!maybeSaveBuffer(index)) return;
 
-    EditorView* view = buffers_[index]->view;
+    TabContent* view = buffers_[index]->view;
     editorStack_->removeWidget(view);
-    view->deleteLater();
+    if (view) view->deleteLater();
     buffers_.erase(buffers_.begin() + index);
 
     if (buffers_.empty()) {
@@ -386,20 +416,22 @@ void MainWindow::ensureAtLeastOneBuffer() {
 }
 
 bool MainWindow::openPath(const QString& path) {
-    // Reuse current buffer if it's a fresh, empty, unmodified Untitled.
+    // Reuse current buffer if it's a fresh, empty, unmodified Untitled editor.
     if (activeIndex_ >= 0 && activeIndex_ < static_cast<int>(buffers_.size())) {
         Buffer* cur = buffers_[activeIndex_].get();
-        if (cur->view->filePath().isEmpty() && cur->view->isEmpty() &&
-            !cur->view->isModified()) {
-            if (!cur->view->loadFile(path)) {
-                QMessageBox::warning(this, "Trowel", QString("Could not open %1").arg(path));
-                return false;
+        if (cur->view && cur->view->kind() == TabContent::Kind::Editor) {
+            auto* ev = static_cast<EditorView*>(cur->view);
+            if (ev->filePath().isEmpty() && ev->isEmpty() && !ev->isModified()) {
+                if (!ev->loadFile(path)) {
+                    QMessageBox::warning(this, "Trowel", QString("Could not open %1").arg(path));
+                    return false;
+                }
+                cur->untitledIndex = 0;
+                updateBufferDisplayName(activeIndex_);
+                rememberRecentFile(path);
+                updateWindowTitle();
+                return true;
             }
-            cur->untitledIndex = 0;
-            updateBufferDisplayName(activeIndex_);
-            rememberRecentFile(path);
-            updateWindowTitle();
-            return true;
         }
     }
 
@@ -412,6 +444,92 @@ bool MainWindow::openPath(const QString& path) {
     refreshTabBar();
     rememberRecentFile(path);
     return true;
+}
+
+bool MainWindow::openDirectory(const QString& path) {
+    QFileInfo info(path);
+    if (!info.exists() || !info.isDir()) {
+        QMessageBox::warning(this, "Trowel", QString("Not a directory: %1").arg(path));
+        return false;
+    }
+    const QString abs = info.absoluteFilePath();
+
+    // Reuse current buffer if it's a fresh, empty, unmodified Untitled editor.
+    if (activeIndex_ >= 0 && activeIndex_ < static_cast<int>(buffers_.size())) {
+        Buffer* cur = buffers_[activeIndex_].get();
+        if (cur->view && cur->view->kind() == TabContent::Kind::Editor) {
+            auto* ev = static_cast<EditorView*>(cur->view);
+            if (ev->filePath().isEmpty() && ev->isEmpty() && !ev->isModified()) {
+                // Swap the editor out for a directory view in place.
+                auto* dv = new DirectoryView(editorStack_);
+                editorStack_->addWidget(dv);
+                editorStack_->removeWidget(ev);
+                ev->deleteLater();
+                cur->view = dv;
+                cur->untitledIndex = 0;
+                connectBufferSignals(activeIndex_);
+                dv->setRoot(abs);
+                editorStack_->setCurrentWidget(dv);
+                updateBufferDisplayName(activeIndex_);
+                updateWindowTitle();
+                updateEditorActionsEnabled();
+                return true;
+            }
+        }
+    }
+
+    // Otherwise create a new buffer with a directory view.
+    auto buf = std::make_unique<Buffer>();
+    auto* dv = new DirectoryView(editorStack_);
+    buf->view = dv;
+    editorStack_->addWidget(dv);
+    dv->setRoot(abs);
+    buf->displayName = computeDisplayName(*buf);
+    buffers_.push_back(std::move(buf));
+    const int newIndex = static_cast<int>(buffers_.size()) - 1;
+    connectBufferSignals(newIndex);
+    activateBuffer(newIndex);
+    refreshTabBar();
+    return true;
+}
+
+bool MainWindow::replaceBufferWithFile(int index, const QString& path) {
+    if (index < 0 || index >= static_cast<int>(buffers_.size())) return false;
+    Buffer* buf = buffers_[index].get();
+    TabContent* old = buf->view;
+
+    auto* editor = new EditorView(editorStack_);
+    editor->setFont(editorFont_);
+    if (!editor->loadFile(path)) {
+        delete editor;
+        QMessageBox::warning(this, "Trowel", QString("Could not open %1").arg(path));
+        return false;
+    }
+    editorStack_->addWidget(editor);
+    editorStack_->removeWidget(old);
+    if (old) old->deleteLater();
+
+    buf->view = editor;
+    buf->untitledIndex = 0;
+    connectBufferSignals(index);
+
+    if (index == activeIndex_) {
+        editorStack_->setCurrentWidget(editor);
+    }
+    updateBufferDisplayName(index);
+    rememberRecentFile(path);
+    updateWindowTitle();
+    updateEditorActionsEnabled();
+    return true;
+}
+
+void MainWindow::updateEditorActionsEnabled() {
+    const bool hasEditor = editorView() != nullptr;
+    if (saveAction_) saveAction_->setEnabled(hasEditor);
+    if (saveAsAction_) saveAsAction_->setEnabled(hasEditor);
+    if (runBufferAction_) runBufferAction_->setEnabled(hasEditor);
+    if (runSelectionAction_) runSelectionAction_->setEnabled(hasEditor);
+    if (pickFontAction_) pickFontAction_->setEnabled(hasEditor);
 }
 
 void MainWindow::rememberRecentFile(const QString& path) {
@@ -473,7 +591,11 @@ void MainWindow::pickFont() {
     const QFont chosen = QFontDialog::getFont(&ok, v->currentFont(), this, "Editor Font");
     if (!ok) return;
     editorFont_ = chosen;
-    for (auto& b : buffers_) b->view->setFont(chosen);
+    for (auto& b : buffers_) {
+        if (b->view && b->view->kind() == TabContent::Kind::Editor) {
+            static_cast<EditorView*>(b->view)->setFont(chosen);
+        }
+    }
     QSettings().setValue("editorFont", chosen);
 }
 
@@ -489,17 +611,32 @@ void MainWindow::openFile() {
     const QString last = settings.value("lastOpenDir", QDir::homePath()).toString();
     const QStringList paths = QFileDialog::getOpenFileNames(
         this, "Open", last,
-        "Turmeric (*.tur *.tur.sweet);;All files (*)");
+        "All files (*);;Turmeric (*.tur *.tur.sweet)");
     if (paths.isEmpty()) return;
     for (const QString& path : paths) {
-        openPath(path);
+        if (QFileInfo(path).isDir()) {
+            openDirectory(path);
+        } else {
+            openPath(path);
+        }
     }
     settings.setValue("lastOpenDir", QFileInfo(paths.last()).absolutePath());
 }
 
+void MainWindow::openDirectoryDialog() {
+    QSettings settings;
+    const QString last = settings.value("lastOpenDir", QDir::homePath()).toString();
+    const QString path = QFileDialog::getExistingDirectory(this, "Open Directory", last);
+    if (path.isEmpty()) return;
+    settings.setValue("lastOpenDir", path);
+    openDirectory(path);
+}
+
 bool MainWindow::saveBuffer(int index) {
     if (index < 0 || index >= static_cast<int>(buffers_.size())) return false;
-    EditorView* v = buffers_[index]->view;
+    TabContent* tc = buffers_[index]->view;
+    if (!tc || tc->kind() != TabContent::Kind::Editor) return false;
+    auto* v = static_cast<EditorView*>(tc);
     if (v->filePath().isEmpty()) return saveBufferAs(index);
     if (!v->saveCurrent()) {
         QMessageBox::warning(this, "Trowel", "Could not save file.");
@@ -510,7 +647,9 @@ bool MainWindow::saveBuffer(int index) {
 
 bool MainWindow::saveBufferAs(int index) {
     if (index < 0 || index >= static_cast<int>(buffers_.size())) return false;
-    EditorView* v = buffers_[index]->view;
+    TabContent* tc = buffers_[index]->view;
+    if (!tc || tc->kind() != TabContent::Kind::Editor) return false;
+    auto* v = static_cast<EditorView*>(tc);
     QSettings settings;
     const QString last = settings.value("lastOpenDir", QDir::homePath()).toString();
     const QString path = QFileDialog::getSaveFileName(
@@ -592,18 +731,20 @@ void MainWindow::closeEvent(QCloseEvent* event) {
 }
 
 void MainWindow::updateWindowTitle() {
-    EditorView* v = editorView();
+    if (activeIndex_ < 0 || activeIndex_ >= static_cast<int>(buffers_.size())) {
+        setWindowTitle("Trowel");
+        return;
+    }
+    TabContent* v = buffers_[activeIndex_]->view;
     if (!v) {
         setWindowTitle("Trowel");
         return;
     }
     const QString path = v->filePath();
-    const QString name = path.isEmpty()
-        ? (activeIndex_ >= 0 ? buffers_[activeIndex_]->displayName : QString("Untitled"))
-        : QFileInfo(path).fileName();
+    const QString name = buffers_[activeIndex_]->displayName;
     const QString marker = v->isModified() ? " •" : "";
     setWindowTitle(QString("%1%2 — Trowel").arg(name, marker));
-    setWindowFilePath(path);
+    setWindowFilePath(v->kind() == TabContent::Kind::Editor ? path : QString());
     setWindowModified(v->isModified());
 }
 
@@ -629,12 +770,19 @@ void MainWindow::restoreState() {
     }
     int desiredActive = settings.value("activeBuffer", 0).toInt();
 
-    for (const QString& path : openPaths) {
+    static const QString kDirPrefix = QStringLiteral("dir://");
+    for (const QString& entry : openPaths) {
+        const bool isDir = entry.startsWith(kDirPrefix);
+        const QString path = isDir ? entry.mid(kDirPrefix.size()) : entry;
         if (!QFileInfo::exists(path)) {
-            statusBar()->showMessage(QString("File no longer exists: %1").arg(path), 4000);
+            statusBar()->showMessage(QString("Path no longer exists: %1").arg(path), 4000);
             continue;
         }
-        addBuffer(path, /*untitledIfEmpty=*/false);
+        if (isDir) {
+            openDirectory(path);
+        } else {
+            addBuffer(path, /*untitledIfEmpty=*/false);
+        }
     }
 
     if (!buffers_.empty()) {
@@ -662,10 +810,16 @@ void MainWindow::persistState() {
     QStringList openPaths;
     int activeInList = -1;
     for (int i = 0; i < static_cast<int>(buffers_.size()); ++i) {
-        const QString path = buffers_[i]->view->filePath();
+        TabContent* v = buffers_[i]->view;
+        if (!v) continue;
+        const QString path = v->filePath();
         if (path.isEmpty()) continue;
         if (i == activeIndex_) activeInList = openPaths.size();
-        openPaths << path;
+        if (v->kind() == TabContent::Kind::Directory) {
+            openPaths << (QStringLiteral("dir://") + path);
+        } else {
+            openPaths << path;
+        }
     }
     settings.setValue("openBuffers", openPaths);
     settings.setValue("activeBuffer", activeInList < 0 ? 0 : activeInList);

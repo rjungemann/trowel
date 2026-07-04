@@ -1,8 +1,9 @@
 #pragma once
 
+#include "app/tab_content.h"
+
 #include <QFont>
 #include <QString>
-#include <QWidget>
 
 #include <utility>
 
@@ -10,7 +11,7 @@ class ScintillaEdit;
 
 namespace trowel {
 
-class EditorView : public QWidget {
+class EditorView : public TabContent {
     Q_OBJECT
 public:
     explicit EditorView(QWidget* parent = nullptr);
@@ -19,9 +20,11 @@ public:
     bool saveFile(const QString& path);
     bool saveCurrent();
 
-    QString filePath() const { return path_; }
-    bool isModified() const;
-    bool isEmpty() const;
+    Kind kind() const override { return Kind::Editor; }
+    QString displayName() const override;
+    QString filePath() const override { return path_; }
+    bool isModified() const override;
+    bool isEmpty() const override;
     QByteArray text() const;
     QByteArray textInRange(int startPos, int endPos) const;
     std::pair<int, int> selectionRange() const;
@@ -40,10 +43,6 @@ public:
     int posFromLineCol(int line, int col) const;
     int lineCount() const;
     int styleAt(int pos) const;
-
-signals:
-    void modifiedChanged(bool modified);
-    void filePathChanged(const QString& path);
 
 private:
     void applyDefaultStyling();

@@ -22,12 +22,15 @@ include(${CMAKE_SOURCE_DIR}/cmake/scintilla_qt.cmake)
 qt_add_resources(TROWEL_RESOURCES resources/resources.qrc)
 
 add_library(trowel_lib STATIC
+    src/app/directory_view.cpp
+    src/app/directory_view.h
     src/app/icon_font.cpp
     src/app/icon_font.h
     src/app/main_window.cpp
     src/app/main_window.h
     src/app/tab_bar.cpp
     src/app/tab_bar.h
+    src/app/tab_content.h
     src/editor/editor_view.cpp
     src/editor/editor_view.h
     src/editor/turmeric_lexer.cpp
