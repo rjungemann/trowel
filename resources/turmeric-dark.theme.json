@@ -16,7 +16,13 @@
     "terminal": {
         "background": "#0C0A08",
         "foreground": "#EAE0D2",
-        "caret": "#D48B1C"
+        "caret": "#D48B1C",
+        "ansi": [
+            "#0C0A08", "#D9735A", "#A8C98A", "#EFA030",
+            "#7AC4B8", "#C4A0E8", "#7AC4B8", "#EAE0D2",
+            "#48433D", "#D9735A", "#A8C98A", "#EFA030",
+            "#7AC4B8", "#C4A0E8", "#7AC4B8", "#EAE0D2"
+        ]
     },
     "styles": {
         "default":        { "fg": "#EAE0D2" },

@@ -34,6 +34,8 @@ struct Theme {
     QColor terminalBg;
     QColor terminalFg;
     QColor terminalCaret;
+    // Standard 16-color ANSI palette: 0-7 normal, 8-15 bright.
+    QColor ansi[16];
 
     QHash<QString, StyleSpec> styles;
 };

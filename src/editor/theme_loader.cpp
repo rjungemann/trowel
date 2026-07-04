@@ -6,6 +6,7 @@
 #include <ScintillaEdit.h>
 
 #include <QFile>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
@@ -114,6 +115,18 @@ Theme LoadBuiltinDarkTheme() {
     t.terminalFg     = parseColor(term.value("foreground"), t.editorFg);
     t.terminalCaret  = parseColor(term.value("caret"),      t.caret);
 
+    // Fallback ANSI palette (VGA-ish) used when the theme JSON omits colors.
+    static const char* kFallbackAnsi[16] = {
+        "#000000","#800000","#008000","#808000","#000080","#800080","#008080","#C0C0C0",
+        "#808080","#FF0000","#00FF00","#FFFF00","#0000FF","#FF00FF","#00FFFF","#FFFFFF",
+    };
+    const QJsonArray ansi = term.value("ansi").toArray();
+    for (int i = 0; i < 16; ++i) {
+        t.ansi[i] = (i < ansi.size())
+            ? parseColor(ansi.at(i), QColor(kFallbackAnsi[i]))
+            : QColor(kFallbackAnsi[i]);
+    }
+
     const QJsonObject styles = root.value("styles").toObject();
     for (auto it = styles.begin(); it != styles.end(); ++it) {
         t.styles.insert(it.key(), parseStyle(it.value()));
@@ -184,6 +197,10 @@ void ApplyThemeToTerminal(TerminalView* terminal, const Theme& theme) {
         "}"
     ).arg(theme.terminalBg.name(), theme.terminalFg.name()));
     terminal->setCursorWidth(2);
+
+    std::array<QColor, 16> ansi;
+    for (int i = 0; i < 16; ++i) ansi[i] = theme.ansi[i];
+    terminal->setTerminalPalette(theme.terminalFg, theme.terminalBg, ansi);
 }
 
 }
