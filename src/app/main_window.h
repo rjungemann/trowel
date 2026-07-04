@@ -49,6 +49,7 @@ private slots:
     void pickFont();
     void openRecentFromAction();
     void toggleSplitOrientation();
+    void toggleReplVisible(bool visible);
     void nextTab();
     void prevTab();
     void closeCurrentTab();
@@ -101,6 +102,7 @@ private:
     QAction* runSelectionAction_ = nullptr;
     QAction* restartReplAction_ = nullptr;
     QAction* toggleSplitAction_ = nullptr;
+    QAction* toggleReplAction_ = nullptr;
     QStringList recentFiles_;
     QFont editorFont_;
 };

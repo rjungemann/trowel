@@ -212,6 +212,18 @@ void MainWindow::setupToolBar() {
     toggleSplitAction_->setIcon(NerdIcon(NF::ViewSplitHorizontal, glyphSize, iconColor));
     connect(toggleSplitAction_, &QAction::triggered, this, &MainWindow::toggleSplitOrientation);
     toolBar_->addAction(toggleSplitAction_);
+
+    toggleReplAction_ = new QAction("Show/Hide REPL", this);
+    toggleReplAction_->setCheckable(true);
+    toggleReplAction_->setChecked(true);
+    toggleReplAction_->setToolTip("Show/Hide REPL");
+    toggleReplAction_->setIcon(NerdIcon(NF::Console, glyphSize, iconColor));
+    connect(toggleReplAction_, &QAction::toggled, this, &MainWindow::toggleReplVisible);
+    toolBar_->addAction(toggleReplAction_);
+}
+
+void MainWindow::toggleReplVisible(bool visible) {
+    if (terminal_) terminal_->setVisible(visible);
 }
 
 void MainWindow::toggleSplitOrientation() {
@@ -475,13 +487,14 @@ void MainWindow::newFile() {
 void MainWindow::openFile() {
     QSettings settings;
     const QString last = settings.value("lastOpenDir", QDir::homePath()).toString();
-    const QString path = QFileDialog::getOpenFileName(
+    const QStringList paths = QFileDialog::getOpenFileNames(
         this, "Open", last,
         "Turmeric (*.tur *.tur.sweet);;All files (*)");
-    if (path.isEmpty()) return;
-    if (openPath(path)) {
-        settings.setValue("lastOpenDir", QFileInfo(path).absolutePath());
+    if (paths.isEmpty()) return;
+    for (const QString& path : paths) {
+        openPath(path);
     }
+    settings.setValue("lastOpenDir", QFileInfo(paths.last()).absolutePath());
 }
 
 bool MainWindow::saveBuffer(int index) {
@@ -602,6 +615,9 @@ void MainWindow::restoreState() {
     if (settings.contains("splitterState")) {
         splitter_->restoreState(settings.value("splitterState").toByteArray());
     }
+    const bool replVisible = settings.value("replVisible", true).toBool();
+    if (terminal_) terminal_->setVisible(replVisible);
+    if (toggleReplAction_) toggleReplAction_->setChecked(replVisible);
     loadRecentFiles();
 
     // Restore open buffers (multi) or fall back to legacy `lastFile`.
@@ -635,6 +651,9 @@ void MainWindow::persistState() {
     QSettings settings;
     settings.setValue("geometry", saveGeometry());
     settings.setValue("splitterState", splitter_->saveState());
+    if (toggleReplAction_) {
+        settings.setValue("replVisible", toggleReplAction_->isChecked());
+    }
     if (EditorView* v = editorView()) {
         settings.setValue("editorFont", v->currentFont());
     }

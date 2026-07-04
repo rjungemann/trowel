@@ -18,6 +18,7 @@ constexpr char32_t PlaylistPlay         = 0xF0411; // nf-md-playlist_play
 constexpr char32_t ViewSplitHorizontal  = 0xF0BCD; // nf-md-view_split_horizontal
 constexpr char32_t ViewSplitVertical    = 0xF0BCE; // nf-md-view_split_vertical
 constexpr char32_t Restart              = 0xF0709; // nf-md-restart
+constexpr char32_t Console              = 0xF018D; // nf-md-console
 }
 
 // Rasterize a Nerd Font glyph into a QIcon. Cached by (codepoint, size, color).
