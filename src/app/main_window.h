@@ -65,6 +65,7 @@ private:
     QToolBar* toolBar_ = nullptr;
     QAction* runBufferAction_ = nullptr;
     QAction* runSelectionAction_ = nullptr;
+    QAction* restartReplAction_ = nullptr;
     QAction* toggleSplitAction_ = nullptr;
     QStringList recentFiles_;
 };

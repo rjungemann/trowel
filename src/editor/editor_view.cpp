@@ -60,7 +60,12 @@ void EditorView::applyDefaultStyling() {
     sci_->setEOLMode(SC_EOL_LF);
 
     sci_->setViewWS(SCWS_INVISIBLE);
+    // Start at 1px so tracking can grow the width to fit the longest visible
+    // line — leaving the default 2000px would show a horizontal scrollbar even
+    // for empty buffers.
+    sci_->setScrollWidth(1);
     sci_->setScrollWidthTracking(true);
+    sci_->setHScrollBar(true);
     sci_->setEndAtLastLine(false);
 }
 

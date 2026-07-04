@@ -118,9 +118,11 @@ void MainWindow::setupMenus() {
 
     runMenu->addSeparator();
 
-    auto* restartAction = runMenu->addAction("Res&tart REPL");
-    restartAction->setShortcut(QKeySequence("Ctrl+Shift+R"));
-    connect(restartAction, &QAction::triggered, this, &MainWindow::restartRepl);
+    restartReplAction_ = new QAction("Res&tart REPL", this);
+    restartReplAction_->setShortcut(QKeySequence("Ctrl+Shift+R"));
+    restartReplAction_->setToolTip("Restart REPL");
+    connect(restartReplAction_, &QAction::triggered, this, &MainWindow::restartRepl);
+    runMenu->addAction(restartReplAction_);
 
     runMenu->addSeparator();
 
@@ -159,6 +161,10 @@ void MainWindow::setupToolBar() {
     if (runSelectionAction_) {
         runSelectionAction_->setIcon(NerdIcon(NF::PlaylistPlay, glyphSize, iconColor));
         toolBar_->addAction(runSelectionAction_);
+    }
+    if (restartReplAction_) {
+        restartReplAction_->setIcon(NerdIcon(NF::Restart, glyphSize, iconColor));
+        toolBar_->addAction(restartReplAction_);
     }
 
     toolBar_->addSeparator();
