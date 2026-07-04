@@ -4,8 +4,11 @@
 
 #include <QDir>
 #include <QFileInfo>
+#include <QEvent>
 #include <QFileSystemModel>
+#include <QFont>
 #include <QHBoxLayout>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QListView>
 #include <QModelIndex>
@@ -61,11 +64,17 @@ DirectoryView::DirectoryView(QWidget* parent)
 
     pathLabel_ = new QLabel(header);
     pathLabel_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    QFont pathFont = pathLabel_->font();
+    const int basePt = pathFont.pointSize();
+    if (basePt > 0) pathFont.setPointSize(std::max(1, basePt - 1));
+    else if (pathFont.pixelSize() > 0) pathFont.setPixelSize(std::max(1, pathFont.pixelSize() - 1));
+    pathFont.setBold(true);
+    pathLabel_->setFont(pathFont);
     hbox->addWidget(pathLabel_, 1);
 
     header->setStyleSheet(QString(
-        "background: %1; color: %2; border-bottom: 1px solid %3;"
-    ).arg(theme.editorBg.name(), theme.editorFg.name(), theme.lineNumberFg.name()));
+        "background: %1; color: %2;"
+    ).arg(theme.editorBg.name(), theme.editorFg.name()));
 
     root->addWidget(header);
 
@@ -93,6 +102,7 @@ DirectoryView::DirectoryView(QWidget* parent)
 
     connect(list_, &QAbstractItemView::activated, this, &DirectoryView::onActivated);
     connect(list_, &QAbstractItemView::doubleClicked, this, &DirectoryView::onActivated);
+    list_->installEventFilter(this);
 
     root->addWidget(list_, 1);
 }
@@ -141,6 +151,23 @@ void DirectoryView::onActivated(const QModelIndex& proxyIndex) {
     } else if (info.isFile()) {
         emit fileActivated(info.absoluteFilePath());
     }
+}
+
+bool DirectoryView::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == list_ && event->type() == QEvent::KeyPress) {
+        auto* ke = static_cast<QKeyEvent*>(event);
+        if (ke->modifiers() == Qt::NoModifier) {
+            if (ke->key() == Qt::Key_Left) {
+                onBackClicked();
+                return true;
+            }
+            if (ke->key() == Qt::Key_Right) {
+                onActivated(list_->currentIndex());
+                return true;
+            }
+        }
+    }
+    return TabContent::eventFilter(watched, event);
 }
 
 void DirectoryView::onBackClicked() {

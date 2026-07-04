@@ -4,6 +4,7 @@
 
 #include <QString>
 
+class QEvent;
 class QFileSystemModel;
 class QLabel;
 class QListView;
@@ -20,6 +21,8 @@ public:
 
     void setRoot(const QString& absolutePath);
     QString root() const { return root_; }
+
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
     Kind kind() const override { return Kind::Directory; }
     QString displayName() const override;
