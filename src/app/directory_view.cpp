@@ -103,6 +103,7 @@ DirectoryView::DirectoryView(QWidget* parent)
     connect(list_, &QAbstractItemView::activated, this, &DirectoryView::onActivated);
     connect(list_, &QAbstractItemView::doubleClicked, this, &DirectoryView::onActivated);
     list_->installEventFilter(this);
+    setFocusProxy(list_);
 
     root->addWidget(list_, 1);
 }
@@ -156,14 +157,19 @@ void DirectoryView::onActivated(const QModelIndex& proxyIndex) {
 bool DirectoryView::eventFilter(QObject* watched, QEvent* event) {
     if (watched == list_ && event->type() == QEvent::KeyPress) {
         auto* ke = static_cast<QKeyEvent*>(event);
-        if (ke->modifiers() == Qt::NoModifier) {
+        const Qt::KeyboardModifiers mods =
+            ke->modifiers() & ~Qt::KeypadModifier;
+        if (mods == Qt::NoModifier) {
             if (ke->key() == Qt::Key_Left) {
                 onBackClicked();
                 return true;
             }
             if (ke->key() == Qt::Key_Right) {
-                onActivated(list_->currentIndex());
-                return true;
+                const QModelIndex cur = list_->currentIndex();
+                if (cur.isValid()) {
+                    onActivated(cur);
+                    return true;
+                }
             }
         }
     }

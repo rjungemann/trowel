@@ -162,7 +162,7 @@ void TabBar::paintEvent(QPaintEvent*) {
 
         // Close glyph on hover.
         if (i == hovered_) {
-            const int size = 16;
+            const int size = 18;
             const int cx = g.closeRect.right() - (kCloseGlyphPadRight - 2) - size / 2;
             const int cy = g.closeRect.center().y();
             const QRect glyphRect(cx - size / 2, cy - size / 2, size, size);
