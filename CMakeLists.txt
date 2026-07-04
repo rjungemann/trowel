@@ -26,6 +26,8 @@ add_library(trowel_lib STATIC
     src/app/icon_font.h
     src/app/main_window.cpp
     src/app/main_window.h
+    src/app/tab_bar.cpp
+    src/app/tab_bar.h
     src/editor/editor_view.cpp
     src/editor/editor_view.h
     src/editor/turmeric_lexer.cpp

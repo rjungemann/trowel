@@ -1,27 +1,34 @@
 #pragma once
 
+#include <QFont>
 #include <QMainWindow>
 #include <QStringList>
+
+#include <memory>
+#include <vector>
 
 class QAction;
 class QMenu;
 class QSplitter;
+class QStackedWidget;
 class QToolBar;
 
 namespace trowel {
 
 class EditorView;
 class ReplSession;
+class TabBar;
 class TerminalView;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
     explicit MainWindow(QWidget* parent = nullptr);
+    ~MainWindow() override;
 
     bool openPath(const QString& path);
 
-    EditorView* editorView() const { return editor_; }
+    EditorView* editorView() const;
     TerminalView* terminalView() const { return terminal_; }
     ReplSession* replSession() const { return repl_; }
     QSplitter* splitter() const { return splitter_; }
@@ -42,13 +49,23 @@ private slots:
     void pickFont();
     void openRecentFromAction();
     void toggleSplitOrientation();
+    void nextTab();
+    void prevTab();
+    void closeCurrentTab();
 
 private:
+    struct Buffer {
+        EditorView* view = nullptr;
+        QString displayName;
+        int untitledIndex = 0;
+    };
+
     void setupUi();
     void setupMenus();
     void setupToolBar();
     void updateWindowTitle();
-    bool maybeSave();
+    bool maybeSaveBuffer(int index);
+    bool maybeSaveAll();
     void restoreState();
     void persistState();
     QString replWorkingDir() const;
@@ -57,10 +74,27 @@ private:
     void rebuildRecentMenu();
     void rememberRecentFile(const QString& path);
 
-    EditorView* editor_;
-    TerminalView* terminal_;
-    ReplSession* repl_;
-    QSplitter* splitter_;
+    int indexOfView(EditorView* v) const;
+    int nextUntitledIndex() const;
+    void refreshTabBar();
+    QString computeDisplayName(const Buffer& buf) const;
+    void updateBufferDisplayName(int index);
+    Buffer* addBuffer(const QString& path, bool untitledIfEmpty);
+    void activateBuffer(int index);
+    void closeBuffer(int index);
+    void ensureAtLeastOneBuffer();
+    bool saveBuffer(int index);
+    bool saveBufferAs(int index);
+    void connectBufferSignals(int index);
+
+    int activeIndex_ = -1;
+    std::vector<std::unique_ptr<Buffer>> buffers_;
+
+    QStackedWidget* editorStack_ = nullptr;
+    TabBar* tabBar_ = nullptr;
+    TerminalView* terminal_ = nullptr;
+    ReplSession* repl_ = nullptr;
+    QSplitter* splitter_ = nullptr;
     QMenu* recentMenu_ = nullptr;
     QToolBar* toolBar_ = nullptr;
     QAction* runBufferAction_ = nullptr;
@@ -68,6 +102,7 @@ private:
     QAction* restartReplAction_ = nullptr;
     QAction* toggleSplitAction_ = nullptr;
     QStringList recentFiles_;
+    QFont editorFont_;
 };
 
 }
