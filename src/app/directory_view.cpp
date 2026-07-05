@@ -101,7 +101,7 @@ DirectoryView::DirectoryView(QWidget* parent)
     list_->setUniformItemSizes(true);
     list_->setStyleSheet(QString(
         "QListView { background: %1; color: %2; border: none; padding: 4px 0; }"
-        "QListView::item { padding: 3px 8px; }"
+        "QListView::item { padding: 1px 6px; }"
         "QListView::item:selected { background: %3; color: %2; }"
     ).arg(theme.editorBg.name(),
           theme.editorFg.name(),

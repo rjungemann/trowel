@@ -51,6 +51,13 @@ void TerminalView::detach() {
     }
 }
 
+void TerminalView::clearScreen() {
+    pending_.clear();
+    clear();
+    resetFormat();
+    verticalScrollBar()->setValue(verticalScrollBar()->maximum());
+}
+
 void TerminalView::showBanner(const QString& text) {
     QTextCursor cursor(document());
     cursor.movePosition(QTextCursor::End);

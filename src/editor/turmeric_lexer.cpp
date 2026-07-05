@@ -95,6 +95,9 @@ constexpr bool IsSymbolCont(unsigned char c) {
 constexpr int kBlockCommentDepthMask = 0xFF;
 constexpr int kInStringBit = 0x100;
 constexpr int kInCBlockBit = 0x200;
+constexpr int kInDatumCommentBit = 0x400;
+constexpr int kDcDepthShift = 16;
+constexpr int kDcDepthMask = 0xFF << kDcDepthShift;
 
 class TurmericLexer final : public ILexer5 {
 public:
@@ -184,6 +187,8 @@ void TurmericLexer::Lex(Sci_PositionU startPos, Sci_Position lengthDoc,
     int blockDepth = lineState & kBlockCommentDepthMask;
     bool inString = (lineState & kInStringBit) != 0;
     bool inCBlock = (lineState & kInCBlockBit) != 0;
+    bool inDatumComment = (lineState & kInDatumCommentBit) != 0;
+    int dcDepth = (lineState & kDcDepthMask) >> kDcDepthShift;
 
     Sci_Position i = 0;
     Sci_Position curLine = startLine;
@@ -208,7 +213,9 @@ void TurmericLexer::Lex(Sci_PositionU startPos, Sci_Position lengthDoc,
                 doc->SetLineState(curLine,
                     (blockDepth & kBlockCommentDepthMask)
                     | (inString ? kInStringBit : 0)
-                    | (inCBlock ? kInCBlockBit : 0));
+                    | (inCBlock ? kInCBlockBit : 0)
+                    | (inDatumComment ? kInDatumCommentBit : 0)
+                    | ((dcDepth << kDcDepthShift) & kDcDepthMask));
                 ++curLine;
             }
         }
@@ -240,6 +247,35 @@ void TurmericLexer::Lex(Sci_PositionU startPos, Sci_Position lengthDoc,
             }
             if (i < readLen && text[i] == '"') { ++i; inString = false; }
             emit(start, i - start, TurStyle::String);
+            continue;
+        }
+        if (inDatumComment) {
+            Sci_Position start = i;
+            while (i < readLen && dcDepth > 0 && text[i] != '\n' && text[i] != '\r') {
+                char ch = text[i];
+                if (ch == '"') {
+                    ++i;
+                    while (i < readLen && text[i] != '"' && text[i] != '\n' && text[i] != '\r') {
+                        if (text[i] == '\\' && i + 1 < readLen) i += 2;
+                        else ++i;
+                    }
+                    if (i < readLen && text[i] == '"') ++i;
+                    continue;
+                }
+                if (ch == ';') {
+                    while (i < readLen && text[i] != '\n' && text[i] != '\r') ++i;
+                    continue;
+                }
+                if (ch == '(' || ch == '[' || ch == '{') { ++dcDepth; ++i; continue; }
+                if (ch == ')' || ch == ']' || ch == '}') { --dcDepth; ++i; continue; }
+                ++i;
+            }
+            emit(start, i - start, TurStyle::LineComment);
+            if (dcDepth == 0) { inDatumComment = false; continue; }
+            if (i < readLen && (text[i] == '\n' || text[i] == '\r')) {
+                emit(i, 1, TurStyle::LineComment);
+                ++i;
+            }
             continue;
         }
         if (inCBlock) {
@@ -292,6 +328,58 @@ void TurmericLexer::Lex(Sci_PositionU startPos, Sci_Position lengthDoc,
                 ++i;
             }
             emit(start, i - start, TurStyle::BlockComment);
+            continue;
+        }
+
+        // Datum comment: #; skips the next s-expression.
+        if (c == '#' && i + 1 < readLen && text[i + 1] == ';') {
+            Sci_Position start = i;
+            i += 2;
+            while (i < readLen && (text[i] == ' ' || text[i] == '\t')) ++i;
+            if (i < readLen) {
+                char dc = text[i];
+                if (dc == '(' || dc == '[' || dc == '{') {
+                    ++i;
+                    dcDepth = 1;
+                    inDatumComment = true;
+                    while (i < readLen && dcDepth > 0 && text[i] != '\n' && text[i] != '\r') {
+                        char ch = text[i];
+                        if (ch == '"') {
+                            ++i;
+                            while (i < readLen && text[i] != '"' && text[i] != '\n' && text[i] != '\r') {
+                                if (text[i] == '\\' && i + 1 < readLen) i += 2;
+                                else ++i;
+                            }
+                            if (i < readLen && text[i] == '"') ++i;
+                            continue;
+                        }
+                        if (ch == ';') {
+                            while (i < readLen && text[i] != '\n' && text[i] != '\r') ++i;
+                            continue;
+                        }
+                        if (ch == '(' || ch == '[' || ch == '{') { ++dcDepth; ++i; continue; }
+                        if (ch == ')' || ch == ']' || ch == '}') { --dcDepth; ++i; continue; }
+                        ++i;
+                    }
+                    if (dcDepth == 0) inDatumComment = false;
+                } else if (dc == '"') {
+                    ++i;
+                    while (i < readLen && text[i] != '"' && text[i] != '\n' && text[i] != '\r') {
+                        if (text[i] == '\\' && i + 1 < readLen) i += 2;
+                        else ++i;
+                    }
+                    if (i < readLen && text[i] == '"') ++i;
+                } else if (dc != '\n' && dc != '\r') {
+                    while (i < readLen && text[i] != '\n' && text[i] != '\r'
+                           && text[i] != ' ' && text[i] != '\t'
+                           && text[i] != '(' && text[i] != ')'
+                           && text[i] != '[' && text[i] != ']'
+                           && text[i] != '{' && text[i] != '}') {
+                        ++i;
+                    }
+                }
+            }
+            emit(start, i - start, TurStyle::LineComment);
             continue;
         }
 
@@ -473,7 +561,9 @@ void TurmericLexer::Lex(Sci_PositionU startPos, Sci_Position lengthDoc,
     doc->SetLineState(curLine,
         (blockDepth & kBlockCommentDepthMask)
         | (inString ? kInStringBit : 0)
-        | (inCBlock ? kInCBlockBit : 0));
+        | (inCBlock ? kInCBlockBit : 0)
+        | (inDatumComment ? kInDatumCommentBit : 0)
+        | ((dcDepth << kDcDepthShift) & kDcDepthMask));
 }
 
 } // namespace

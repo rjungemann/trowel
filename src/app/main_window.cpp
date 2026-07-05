@@ -175,6 +175,12 @@ void MainWindow::setupMenus() {
     connect(restartReplAction_, &QAction::triggered, this, &MainWindow::restartRepl);
     runMenu->addAction(restartReplAction_);
 
+    clearReplAction_ = new QAction("&Clear REPL", this);
+    clearReplAction_->setShortcut(QKeySequence("Ctrl+Shift+K"));
+    clearReplAction_->setToolTip("Clear REPL Output");
+    connect(clearReplAction_, &QAction::triggered, this, &MainWindow::clearRepl);
+    runMenu->addAction(clearReplAction_);
+
     runMenu->addSeparator();
 
     auto* focusEditorAction = runMenu->addAction("Focus &Editor");
@@ -218,6 +224,10 @@ void MainWindow::setupToolBar() {
     if (restartReplAction_) {
         restartReplAction_->setIcon(NerdIcon(NF::Restart, glyphSize, iconColor));
         toolBar_->addAction(restartReplAction_);
+    }
+    if (clearReplAction_) {
+        clearReplAction_->setIcon(NerdIcon(NF::Broom, glyphSize, iconColor));
+        toolBar_->addAction(clearReplAction_);
     }
 
     toolBar_->addSeparator();
@@ -693,6 +703,10 @@ bool MainWindow::saveBufferAs(int index) {
 
 bool MainWindow::save() { return saveBuffer(activeIndex_); }
 bool MainWindow::saveAs() { return saveBufferAs(activeIndex_); }
+
+void MainWindow::clearRepl() {
+    if (terminal_) terminal_->clearScreen();
+}
 
 void MainWindow::restartRepl() {
     repl_->restart(replWorkingDir());

@@ -21,6 +21,7 @@ public:
 
     void appendOutput(const QByteArray& bytes);
     void showBanner(const QString& text);
+    void clearScreen();
 
     // Set the ANSI palette + default fg/bg for SGR rendering. Colors are
     // consulted for SGR 30–37, 90–97, 38/48;5;n and 38/48;2;r;g;b. Default fg

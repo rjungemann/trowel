@@ -46,6 +46,7 @@ private slots:
     bool save();
     bool saveAs();
     void restartRepl();
+    void clearRepl();
     void focusEditor();
     void focusRepl();
     void toggleReplEditorFocus();
@@ -109,6 +110,7 @@ private:
     QAction* runBufferAction_ = nullptr;
     QAction* runSelectionAction_ = nullptr;
     QAction* restartReplAction_ = nullptr;
+    QAction* clearReplAction_ = nullptr;
     QAction* toggleSplitAction_ = nullptr;
     QAction* toggleReplAction_ = nullptr;
     QAction* saveAction_ = nullptr;
