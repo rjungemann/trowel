@@ -45,6 +45,7 @@ MainWindow::MainWindow(QWidget* parent)
     setupToolBar();
     restoreState();
     ensureAtLeastOneBuffer();
+    updateEditorActionsEnabled();
     updateWindowTitle();
 
     repl_ = new ReplSession(terminal_, this);
@@ -706,6 +707,10 @@ bool MainWindow::saveAs() { return saveBufferAs(activeIndex_); }
 
 void MainWindow::clearRepl() {
     if (terminal_) terminal_->clearScreen();
+    // If the REPL is idle at its prompt, ask it to redraw so the user sees the
+    // prompt after the wipe. When busy, leave the screen blank — a running
+    // command's output will fill it back in.
+    if (repl_) repl_->redrawPrompt();
 }
 
 void MainWindow::restartRepl() {
