@@ -6,7 +6,7 @@
 
 class QEvent;
 class QFileSystemModel;
-class QLabel;
+class QLineEdit;
 class QListView;
 class QModelIndex;
 class QSortFilterProxyModel;
@@ -34,6 +34,7 @@ signals:
 private slots:
     void onActivated(const QModelIndex& proxyIndex);
     void onBackClicked();
+    void commitPathEdit();
 
 private:
     void updateHeader();
@@ -42,7 +43,7 @@ private:
     QFileSystemModel* model_ = nullptr;
     QSortFilterProxyModel* proxy_ = nullptr;
     QListView* list_ = nullptr;
-    QLabel* pathLabel_ = nullptr;
+    QLineEdit* pathEdit_ = nullptr;
     QToolButton* backButton_ = nullptr;
 };
 

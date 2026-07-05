@@ -21,6 +21,7 @@ public:
     void setTooltip(int index, const QString& tip);
 
     void setColors(const QColor& bg, const QColor& fg, const QColor& divider);
+    void setActiveFg(const QColor& fg);
 
 signals:
     void activateRequested(int index);
@@ -51,6 +52,7 @@ private:
     int contentWidth() const;
     int maxScrollOffset() const;
     void clampScrollOffset();
+    void ensureActiveVisible();
 
     std::vector<TabGeom> geoms_;
     std::vector<bool> modified_;
@@ -62,6 +64,7 @@ private:
 
     QColor bg_;
     QColor fg_;
+    QColor activeFg_;
     QColor divider_;
     int scrollOffset_ = 0;
 };

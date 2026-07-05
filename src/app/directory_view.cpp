@@ -9,7 +9,7 @@
 #include <QFont>
 #include <QHBoxLayout>
 #include <QKeyEvent>
-#include <QLabel>
+#include <QLineEdit>
 #include <QListView>
 #include <QModelIndex>
 #include <QSortFilterProxyModel>
@@ -31,6 +31,9 @@ protected:
         if (!fsm) return QSortFilterProxyModel::lessThan(left, right);
         const QFileInfo li = fsm->fileInfo(left);
         const QFileInfo ri = fsm->fileInfo(right);
+        const bool ldd = (li.fileName() == "..");
+        const bool rdd = (ri.fileName() == "..");
+        if (ldd != rdd) return ldd;
         const bool ld = li.isDir();
         const bool rd = ri.isDir();
         if (ld != rd) return ld;
@@ -62,25 +65,29 @@ DirectoryView::DirectoryView(QWidget* parent)
     connect(backButton_, &QToolButton::clicked, this, &DirectoryView::onBackClicked);
     hbox->addWidget(backButton_);
 
-    pathLabel_ = new QLabel(header);
-    pathLabel_->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    QFont pathFont = pathLabel_->font();
+    pathEdit_ = new QLineEdit(header);
+    pathEdit_->setFrame(false);
+    QFont pathFont = pathEdit_->font();
     const int basePt = pathFont.pointSize();
     if (basePt > 0) pathFont.setPointSize(std::max(1, basePt - 1));
     else if (pathFont.pixelSize() > 0) pathFont.setPixelSize(std::max(1, pathFont.pixelSize() - 1));
     pathFont.setBold(true);
-    pathLabel_->setFont(pathFont);
-    hbox->addWidget(pathLabel_, 1);
+    pathEdit_->setFont(pathFont);
+    pathEdit_->installEventFilter(this);
+    connect(pathEdit_, &QLineEdit::editingFinished, this, &DirectoryView::commitPathEdit);
+    hbox->addWidget(pathEdit_, 1);
 
     header->setStyleSheet(QString(
         "background: %1; color: %2;"
+        "QLineEdit { background: transparent; color: %2; border: none; padding: 0; }"
     ).arg(theme.editorBg.name(), theme.editorFg.name()));
 
     root->addWidget(header);
 
     // File system model + proxy for dirs-first sort.
     model_ = new QFileSystemModel(this);
-    model_->setFilter(QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot);
+    // Include ".." (via QDir::NoDot) but exclude "." from listings.
+    model_->setFilter(QDir::AllEntries | QDir::Hidden | QDir::NoDot);
     model_->setReadOnly(true);
 
     proxy_ = new DirsFirstProxy(this);
@@ -138,9 +145,20 @@ void DirectoryView::setRoot(const QString& absolutePath) {
 }
 
 void DirectoryView::updateHeader() {
-    pathLabel_->setText(root_);
+    pathEdit_->setText(root_);
     QDir d(root_);
     backButton_->setEnabled(d.cdUp());
+}
+
+void DirectoryView::commitPathEdit() {
+    if (!pathEdit_) return;
+    const QString entered = pathEdit_->text().trimmed();
+    QFileInfo info(entered);
+    if (entered.isEmpty() || !info.exists() || !info.isDir()) {
+        pathEdit_->setText(root_);
+        return;
+    }
+    setRoot(info.absoluteFilePath());
 }
 
 void DirectoryView::onActivated(const QModelIndex& proxyIndex) {
@@ -155,6 +173,14 @@ void DirectoryView::onActivated(const QModelIndex& proxyIndex) {
 }
 
 bool DirectoryView::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == pathEdit_ && event->type() == QEvent::KeyPress) {
+        auto* ke = static_cast<QKeyEvent*>(event);
+        if (ke->key() == Qt::Key_Escape) {
+            pathEdit_->setText(root_);
+            list_->setFocus();
+            return true;
+        }
+    }
     if (watched == list_ && event->type() == QEvent::KeyPress) {
         auto* ke = static_cast<QKeyEvent*>(event);
         const Qt::KeyboardModifiers mods =

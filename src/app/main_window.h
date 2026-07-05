@@ -48,6 +48,7 @@ private slots:
     void restartRepl();
     void focusEditor();
     void focusRepl();
+    void toggleReplEditorFocus();
     void runBuffer();
     void runSelection();
     void pickFont();
@@ -74,6 +75,7 @@ private:
     void restoreState();
     void persistState();
     QString replWorkingDir() const;
+    void openSettingsDirectory(const QString& relPath);
 
     void loadRecentFiles();
     void rebuildRecentMenu();

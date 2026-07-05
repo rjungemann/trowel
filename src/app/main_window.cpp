@@ -22,11 +22,13 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QSettings>
+#include <QDir>
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QStatusBar>
 #include <QStringList>
 #include <QToolBar>
+#include <QToolButton>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -80,6 +82,7 @@ void MainWindow::setupUi() {
     tabBar_ = new TabBar(central);
     const Theme theme = LoadBuiltinDarkTheme();
     tabBar_->setColors(theme.editorBg, theme.editorFg, theme.lineNumberFg);
+    tabBar_->setActiveFg(theme.matchedBraceFg);
 
     vbox->addWidget(tabBar_);
     vbox->addWidget(splitter_, 1);
@@ -181,6 +184,10 @@ void MainWindow::setupMenus() {
     auto* focusReplAction = runMenu->addAction("Focus RE&PL");
     focusReplAction->setShortcut(QKeySequence("Ctrl+T"));
     connect(focusReplAction, &QAction::triggered, this, &MainWindow::focusRepl);
+
+    auto* toggleFocusAction = runMenu->addAction("Toggle REPL/Editor &Focus");
+    toggleFocusAction->setShortcut(QKeySequence("Ctrl+`"));
+    connect(toggleFocusAction, &QAction::triggered, this, &MainWindow::toggleReplEditorFocus);
 }
 
 void MainWindow::setupToolBar() {
@@ -228,6 +235,23 @@ void MainWindow::setupToolBar() {
     toggleReplAction_->setIcon(NerdIcon(NF::Console, glyphSize, iconColor));
     connect(toggleReplAction_, &QAction::toggled, this, &MainWindow::toggleReplVisible);
     toolBar_->addAction(toggleReplAction_);
+
+    toolBar_->addSeparator();
+
+    auto* settingsMenu = new QMenu(this);
+    auto* trowelSettingsAction = settingsMenu->addAction("Trowel Settings");
+    connect(trowelSettingsAction, &QAction::triggered, this,
+            [this]{ openSettingsDirectory(".config/trowel"); });
+    auto* turmericSettingsAction = settingsMenu->addAction("Turmeric Settings");
+    connect(turmericSettingsAction, &QAction::triggered, this,
+            [this]{ openSettingsDirectory(".config/turmeric"); });
+
+    auto* settingsButton = new QToolButton(toolBar_);
+    settingsButton->setToolTip("Settings");
+    settingsButton->setIcon(NerdIcon(NF::Cog, glyphSize, iconColor));
+    settingsButton->setMenu(settingsMenu);
+    settingsButton->setPopupMode(QToolButton::InstantPopup);
+    toolBar_->addWidget(settingsButton);
 }
 
 void MainWindow::toggleReplVisible(bool visible) {
@@ -697,6 +721,14 @@ void MainWindow::focusRepl() {
     if (terminal_) terminal_->setFocus();
 }
 
+void MainWindow::toggleReplEditorFocus() {
+    if (terminal_ && terminal_->hasFocus()) {
+        focusEditor();
+    } else {
+        focusRepl();
+    }
+}
+
 void MainWindow::nextTab() {
     if (buffers_.empty()) return;
     activateBuffer((activeIndex_ + 1) % static_cast<int>(buffers_.size()));
@@ -710,6 +742,21 @@ void MainWindow::prevTab() {
 
 void MainWindow::closeCurrentTab() {
     closeBuffer(activeIndex_);
+}
+
+void MainWindow::openSettingsDirectory(const QString& relPath) {
+    const QString path = QDir(QDir::homePath()).filePath(relPath);
+    QDir().mkpath(path);
+    const QString abs = QFileInfo(path).absoluteFilePath();
+    for (int i = 0; i < static_cast<int>(buffers_.size()); ++i) {
+        TabContent* v = buffers_[i]->view;
+        if (!v || v->kind() != TabContent::Kind::Directory) continue;
+        if (QFileInfo(v->filePath()).absoluteFilePath() == abs) {
+            activateBuffer(i);
+            return;
+        }
+    }
+    openDirectory(abs);
 }
 
 QString MainWindow::replWorkingDir() const {

@@ -14,7 +14,7 @@ namespace trowel {
 namespace {
 constexpr int kVPad = 4;
 constexpr int kHPad = 12;
-constexpr int kCloseSlot = 20;
+constexpr int kCloseSlot = 24;
 constexpr int kMaxTabWidth = 240;
 constexpr int kCloseGlyphPadRight = 8;
 constexpr int kDividerMarginY = 4;
@@ -27,6 +27,7 @@ TabBar::TabBar(QWidget* parent)
     setAttribute(Qt::WA_Hover, true);
     bg_ = QColor("#1e1e1e");
     fg_ = QColor("#d0d0d0");
+    activeFg_ = QColor("#EFA030");
     divider_ = QColor("#3a3a3a");
 
     QFont f = font();
@@ -45,6 +46,11 @@ void TabBar::setColors(const QColor& bg, const QColor& fg, const QColor& divider
     update();
 }
 
+void TabBar::setActiveFg(const QColor& fg) {
+    activeFg_ = fg;
+    update();
+}
+
 void TabBar::setTabs(const QStringList& displayNames, int activeIndex) {
     names_ = displayNames;
     tooltips_.clear();
@@ -53,7 +59,7 @@ void TabBar::setTabs(const QStringList& displayNames, int activeIndex) {
     active_ = activeIndex;
     if (hovered_ >= names_.size()) hovered_ = -1;
     relayout();
-    clampScrollOffset();
+    ensureActiveVisible();
     update();
 }
 
@@ -61,6 +67,7 @@ void TabBar::setActive(int index) {
     if (active_ == index) return;
     active_ = index;
     relayout();
+    ensureActiveVisible();
     update();
 }
 
@@ -151,6 +158,19 @@ void TabBar::clampScrollOffset() {
     scrollOffset_ = std::clamp(scrollOffset_, 0, maxScrollOffset());
 }
 
+void TabBar::ensureActiveVisible() {
+    if (active_ < 0 || active_ >= static_cast<int>(geoms_.size())) return;
+    const QRect& r = geoms_[active_].rect;
+    const int viewLeft = scrollOffset_;
+    const int viewRight = scrollOffset_ + width();
+    if (r.left() < viewLeft) {
+        scrollOffset_ = r.left();
+    } else if (r.right() >= viewRight) {
+        scrollOffset_ = r.right() - width() + 1;
+    }
+    clampScrollOffset();
+}
+
 void TabBar::paintEvent(QPaintEvent*) {
     QPainter p(this);
     p.fillRect(rect(), bg_);
@@ -176,11 +196,11 @@ void TabBar::paintEvent(QPaintEvent*) {
         QFont f = font();
         f.setBold(true);
         p.setFont(f);
-        p.setPen(fg_);
+        p.setPen(i == active_ ? activeFg_ : fg_);
         p.drawText(textRect, Qt::AlignCenter, g.label);
 
-        // Close glyph on hover.
-        if (i == hovered_) {
+        // Close glyph, always visible; brightens when hovered directly.
+        {
             const int size = 18;
             const int cx = g.closeRect.right() - (kCloseGlyphPadRight - 2) - size / 2;
             const int cy = g.closeRect.center().y();
@@ -188,7 +208,8 @@ void TabBar::paintEvent(QPaintEvent*) {
             QFont cf = font();
             cf.setBold(false);
             p.setFont(cf);
-            p.setPen(hoverClose_ ? fg_ : divider_);
+            const bool hot = (i == hovered_) && hoverClose_;
+            p.setPen(hot ? fg_ : divider_);
             p.drawText(glyphRect, Qt::AlignCenter, QString(QChar(0x00D7)));
         }
     }
