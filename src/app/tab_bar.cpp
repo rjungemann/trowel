@@ -5,6 +5,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QToolTip>
+#include <QWheelEvent>
 
 #include <algorithm>
 
@@ -52,6 +53,7 @@ void TabBar::setTabs(const QStringList& displayNames, int activeIndex) {
     active_ = activeIndex;
     if (hovered_ >= names_.size()) hovered_ = -1;
     relayout();
+    clampScrollOffset();
     update();
 }
 
@@ -116,14 +118,16 @@ void TabBar::relayout() {
 }
 
 int TabBar::tabAt(const QPoint& p) const {
+    const QPoint q(p.x() + scrollOffset_, p.y());
     for (int i = 0; i < static_cast<int>(geoms_.size()); ++i) {
-        if (geoms_[i].rect.contains(p)) return i;
+        if (geoms_[i].rect.contains(q)) return i;
     }
     return -1;
 }
 
 bool TabBar::closeHit(int index, const QPoint& p) const {
     if (index < 0 || index >= static_cast<int>(geoms_.size())) return false;
+    const QPoint q(p.x() + scrollOffset_, p.y());
     const QRect& cr = geoms_[index].closeRect;
     // Approximate the glyph hit box: an 16x16 square centered vertically,
     // right-aligned within the close slot with kCloseGlyphPadRight padding.
@@ -131,7 +135,20 @@ bool TabBar::closeHit(int index, const QPoint& p) const {
     const int cx = cr.right() - (kCloseGlyphPadRight - 2) - size / 2;
     const int cy = cr.center().y() - 1;
     const QRect glyphRect(cx - size / 2, cy - size / 2, size, size);
-    return glyphRect.contains(p);
+    return glyphRect.contains(q);
+}
+
+int TabBar::contentWidth() const {
+    if (geoms_.empty()) return 0;
+    return geoms_.back().rect.right() + 1;
+}
+
+int TabBar::maxScrollOffset() const {
+    return std::max(0, contentWidth() - width());
+}
+
+void TabBar::clampScrollOffset() {
+    scrollOffset_ = std::clamp(scrollOffset_, 0, maxScrollOffset());
 }
 
 void TabBar::paintEvent(QPaintEvent*) {
@@ -141,6 +158,8 @@ void TabBar::paintEvent(QPaintEvent*) {
     // Bottom 1px border.
     p.setPen(divider_);
     p.drawLine(0, height() - 1, width(), height() - 1);
+
+    p.translate(-scrollOffset_, 0);
 
     for (int i = 0; i < static_cast<int>(geoms_.size()); ++i) {
         const TabGeom& g = geoms_[i];
@@ -222,6 +241,28 @@ void TabBar::leaveEvent(QEvent*) {
 
 void TabBar::resizeEvent(QResizeEvent*) {
     relayout();
+    clampScrollOffset();
+}
+
+void TabBar::wheelEvent(QWheelEvent* e) {
+    // Prefer pixel-precise deltas from trackpads; fall back to angle deltas.
+    const QPoint pd = e->pixelDelta();
+    const QPoint ad = e->angleDelta();
+    int dx = 0;
+    if (!pd.isNull()) {
+        // Horizontal scroll or, when swiping vertically, use y as x.
+        dx = pd.x() != 0 ? pd.x() : pd.y();
+    } else if (!ad.isNull()) {
+        const int a = ad.x() != 0 ? ad.x() : ad.y();
+        // Angle delta is in 1/8 degrees; typical notch = 120 units.
+        // Scroll roughly one tab (~120 px) per notch.
+        dx = a * 120 / 120;
+    }
+    if (dx == 0) { e->ignore(); return; }
+    scrollOffset_ -= dx;
+    clampScrollOffset();
+    update();
+    e->accept();
 }
 
 bool TabBar::event(QEvent* e) {

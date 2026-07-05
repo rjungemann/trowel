@@ -32,6 +32,7 @@ protected:
     void mousePressEvent(QMouseEvent*) override;
     void leaveEvent(QEvent*) override;
     void resizeEvent(QResizeEvent*) override;
+    void wheelEvent(QWheelEvent*) override;
     bool event(QEvent* e) override;
 
 private:
@@ -47,6 +48,9 @@ private:
     void updateFixedHeight();
     int tabAt(const QPoint& p) const;
     bool closeHit(int index, const QPoint& p) const;
+    int contentWidth() const;
+    int maxScrollOffset() const;
+    void clampScrollOffset();
 
     std::vector<TabGeom> geoms_;
     std::vector<bool> modified_;
@@ -59,6 +63,7 @@ private:
     QColor bg_;
     QColor fg_;
     QColor divider_;
+    int scrollOffset_ = 0;
 };
 
 }
