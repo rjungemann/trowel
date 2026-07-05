@@ -38,6 +38,10 @@ QString escapeForTurmericString(const QString& path) {
     return out;
 }
 
+bool resetEnv(ReplSession* repl) {
+    return repl->sendCommand(QByteArray(":reset"));
+}
+
 RunResult writeScratchAndLoad(ReplSession* repl,
                               const QByteArray& contents, const QString& ext) {
     RunResult r;
@@ -78,6 +82,13 @@ RunResult RunBuffer(EditorView* editor, ReplSession* repl) {
     }
     if (!repl->isRunning()) {
         r.message = "REPL is not running — start it from Run > Restart REPL.";
+        return r;
+    }
+
+    // Fresh env before loading a whole file — matches "run buffer = new env"
+    // while selections keep the current env.
+    if (!resetEnv(repl)) {
+        r.message = "REPL is not running.";
         return r;
     }
 

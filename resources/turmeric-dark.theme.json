@@ -4,7 +4,7 @@
         "background": "#0C0A08",
         "foreground": "#EAE0D2",
         "caret": "#D48B1C",
-        "selectionBackground": "#D48B1C2E",
+        "selectionBackground": "#808B1C2E",
         "currentLineBackground": "#111009",
         "lineNumberForeground": "#453F39",
         "lineNumberBackground": "#0C0A08",

@@ -12,7 +12,7 @@
 namespace trowel {
 
 namespace {
-constexpr int kVPad = 4;
+constexpr int kVPad = 5;
 constexpr int kHPad = 12;
 constexpr int kCloseSlot = 24;
 constexpr int kMaxTabWidth = 240;

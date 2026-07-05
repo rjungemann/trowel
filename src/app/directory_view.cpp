@@ -55,7 +55,7 @@ DirectoryView::DirectoryView(QWidget* parent)
     // Header row.
     auto* header = new QWidget(this);
     auto* hbox = new QHBoxLayout(header);
-    hbox->setContentsMargins(6, 4, 6, 4);
+    hbox->setContentsMargins(6, 6, 6, 0);
     hbox->setSpacing(6);
 
     backButton_ = new QToolButton(header);
