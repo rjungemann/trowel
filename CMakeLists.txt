@@ -72,25 +72,32 @@ if(APPLE)
         MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
         MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
     )
-endif()
 
-# Optional: drop a prebuilt `tur` binary into the bundle so the drag-installed
-# app works with no PATH setup. See docs/plans/embedded-turmeric.md.
-# Pass at configure time: -DTROWEL_BUNDLED_TUR=/absolute/path/to/tur
-set(TROWEL_BUNDLED_TUR "" CACHE FILEPATH "Path to a prebuilt tur binary to embed in the app bundle")
-if(TROWEL_BUNDLED_TUR)
-    if(NOT EXISTS "${TROWEL_BUNDLED_TUR}")
-        message(FATAL_ERROR "TROWEL_BUNDLED_TUR is set to '${TROWEL_BUNDLED_TUR}' but that file does not exist.")
-    endif()
-    if(APPLE)
-        set(_tur_dest "$<TARGET_BUNDLE_CONTENT_DIR:trowel>/MacOS/tur")
+    set(TROWEL_TURMERIC_VERSION "v0.26.6")
+    set(TROWEL_TURMERIC_SHA256
+        "dcb379b4350f5b81e7015a9be2b9ff57ed13c56d17b72e30001dfb90e140b73a")
+    set(TROWEL_TURMERIC_URL
+        "https://github.com/rjungemann/turmeric/releases/download/${TROWEL_TURMERIC_VERSION}/turmeric-${TROWEL_TURMERIC_VERSION}-macos-arm64.tar.gz")
+
+    if(CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "arm64" OR
+       CMAKE_OSX_ARCHITECTURES MATCHES "arm64")
+        include(FetchContent)
+        FetchContent_Declare(turmeric_prebuilt
+            URL      ${TROWEL_TURMERIC_URL}
+            URL_HASH SHA256=${TROWEL_TURMERIC_SHA256}
+        )
+        FetchContent_MakeAvailable(turmeric_prebuilt)
+
+        add_custom_command(TARGET trowel POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${turmeric_prebuilt_SOURCE_DIR}"
+                "$<TARGET_BUNDLE_CONTENT_DIR:trowel>/Resources/turmeric"
+            COMMENT "Staging Turmeric ${TROWEL_TURMERIC_VERSION} into app bundle"
+            VERBATIM
+        )
     else()
-        set(_tur_dest "$<TARGET_FILE_DIR:trowel>/tur")
+        message(WARNING
+            "No prebuilt Turmeric available for host ${CMAKE_HOST_SYSTEM_PROCESSOR}; "
+            "Trowel.app will fall back to `tur` on PATH at runtime.")
     endif()
-    add_custom_command(TARGET trowel POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${TROWEL_BUNDLED_TUR}" "${_tur_dest}"
-        COMMAND chmod +x "${_tur_dest}"
-        COMMENT "Embedding tur binary from ${TROWEL_BUNDLED_TUR}"
-        VERBATIM)
 endif()

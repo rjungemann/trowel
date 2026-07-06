@@ -17,32 +17,6 @@ build: configure
 # Rebuild from scratch
 rebuild: clean build
 
-# Package a self-contained bundle with an embedded `tur` binary.
-# Usage: just package /absolute/path/to/tur
-# On macOS this produces {{build_dir}}/trowel.app with tur inside Contents/MacOS/.
-# See docs/plans/embedded-turmeric.md for signing/notarization/DMG steps.
-package tur:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    tur_path="{{tur}}"
-    if [[ ! -x "$tur_path" ]]; then
-        echo "package: '$tur_path' is not an executable file" >&2
-        exit 1
-    fi
-    tur_abs=$(cd "$(dirname "$tur_path")" && pwd)/$(basename "$tur_path")
-    cmake --preset {{preset}} -DTROWEL_BUNDLED_TUR="$tur_abs"
-    cmake --build --preset {{preset}}
-    if [[ "{{os()}}" == "macos" ]]; then
-        bundled="{{build_dir}}/trowel.app/Contents/MacOS/tur"
-        echo "embedded: $bundled"
-        otool -L "$bundled" | tail -n +2 | awk '{print $1}' \
-            | grep -Ev '^(/usr/lib/|/System/)' \
-            | { grep . && echo "warning: tur has non-system dylib deps — see docs/plans/embedded-turmeric.md dylib closure section" >&2; true; } \
-            || echo "tur has no non-system dylib deps"
-    else
-        echo "embedded: {{build_dir}}/tur"
-    fi
-
 # Run the app
 run: build
     {{bin}}

@@ -241,18 +241,12 @@ void TurmericLexer::Lex(Sci_PositionU startPos, Sci_Position lengthDoc,
         }
         if (inString) {
             Sci_Position start = i;
-            while (i < readLen && text[i] != '"' && text[i] != '\n' && text[i] != '\r') {
+            while (i < readLen && text[i] != '"' && text[i] != '\n') {
                 if (text[i] == '\\' && i + 1 < readLen) i += 2;
                 else ++i;
             }
             if (i < readLen && text[i] == '"') { ++i; inString = false; }
             emit(start, i - start, TurStyle::String);
-            // Must advance past the newline so the outer loop's line-state
-            // persist block runs and we don't spin here forever.
-            if (inString && i < readLen && (text[i] == '\n' || text[i] == '\r')) {
-                emit(i, 1, TurStyle::String);
-                ++i;
-            }
             continue;
         }
         if (inDatumComment) {
@@ -412,18 +406,12 @@ void TurmericLexer::Lex(Sci_PositionU startPos, Sci_Position lengthDoc,
             Sci_Position start = i;
             ++i;
             inString = true;
-            while (i < readLen && text[i] != '"' && text[i] != '\n' && text[i] != '\r') {
+            while (i < readLen && text[i] != '"' && text[i] != '\n') {
                 if (text[i] == '\\' && i + 1 < readLen) i += 2;
                 else ++i;
             }
             if (i < readLen && text[i] == '"') { ++i; inString = false; }
             emit(start, i - start, TurStyle::String);
-            // Advance past the terminating newline; same reason as the
-            // inString-continuation block above.
-            if (inString && i < readLen && (text[i] == '\n' || text[i] == '\r')) {
-                emit(i, 1, TurStyle::String);
-                ++i;
-            }
             continue;
         }
 
