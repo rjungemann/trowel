@@ -73,3 +73,24 @@ if(APPLE)
         MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
     )
 endif()
+
+# Optional: drop a prebuilt `tur` binary into the bundle so the drag-installed
+# app works with no PATH setup. See docs/plans/embedded-turmeric.md.
+# Pass at configure time: -DTROWEL_BUNDLED_TUR=/absolute/path/to/tur
+set(TROWEL_BUNDLED_TUR "" CACHE FILEPATH "Path to a prebuilt tur binary to embed in the app bundle")
+if(TROWEL_BUNDLED_TUR)
+    if(NOT EXISTS "${TROWEL_BUNDLED_TUR}")
+        message(FATAL_ERROR "TROWEL_BUNDLED_TUR is set to '${TROWEL_BUNDLED_TUR}' but that file does not exist.")
+    endif()
+    if(APPLE)
+        set(_tur_dest "$<TARGET_BUNDLE_CONTENT_DIR:trowel>/MacOS/tur")
+    else()
+        set(_tur_dest "$<TARGET_FILE_DIR:trowel>/tur")
+    endif()
+    add_custom_command(TARGET trowel POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${TROWEL_BUNDLED_TUR}" "${_tur_dest}"
+        COMMAND chmod +x "${_tur_dest}"
+        COMMENT "Embedding tur binary from ${TROWEL_BUNDLED_TUR}"
+        VERBATIM)
+endif()

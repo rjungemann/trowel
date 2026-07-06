@@ -1,5 +1,6 @@
 #include "app/main_window.h"
 #include "control/control_server.h"
+#include "repl/repl_session.h"
 
 #include <QApplication>
 #include <QCommandLineParser>
@@ -16,6 +17,8 @@ int main(int argc, char** argv) {
     QApplication::setApplicationName("Trowel");
     QApplication::setOrganizationName("turmeric");
     QApplication::setApplicationVersion("0.0.1");
+
+    trowel::ReplSession::ensureConfigFile();
 
     QCommandLineParser parser;
     parser.setApplicationDescription("Trowel — a native editor for turmeric");

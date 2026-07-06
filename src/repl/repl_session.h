@@ -35,6 +35,24 @@ public:
     void setTurBinary(const QString& path) { turBinary_ = path; }
     QString turBinary() const { return turBinary_; }
 
+    // Which of the three sources supplied the resolved path.
+    enum class BinarySource { Preference, Bundled, Path, None };
+
+    struct Resolution {
+        QString path;              // resolved absolute path, empty on failure
+        BinarySource source = BinarySource::None;
+        QString preferenceTried;   // non-empty if a preference was set but rejected
+        QString bundledTried;      // non-empty if a bundled path was checked
+    };
+
+    // Runs the preference → bundled → PATH lookup. Pure, side-effect free.
+    static Resolution resolveTurBinary(const QString& turBinaryName);
+
+    // Create ~/.config/trowel/config.tur with a commented-out template if it
+    // does not already exist. Called once at startup so the "Trowel Settings"
+    // menu entry always opens a directory the user can see something in.
+    static void ensureConfigFile();
+
     PtySession* pty() const { return pty_; }
 
 signals:

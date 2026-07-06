@@ -3,7 +3,13 @@
 #include "repl/pty_session.h"
 #include "repl/terminal_view.h"
 
+#include <QCoreApplication>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QRegularExpression>
 #include <QStandardPaths>
+#include <QTextStream>
 
 namespace trowel {
 
@@ -14,6 +20,80 @@ ReplSession::ReplSession(TerminalView* view, QObject* parent)
 
 bool ReplSession::isRunning() const {
     return pty_ && pty_->isRunning();
+}
+
+void ReplSession::ensureConfigFile() {
+    const QString dir = QDir(QDir::homePath()).filePath(".config/trowel");
+    QDir().mkpath(dir);
+    const QString path = QDir(dir).filePath("config.tur");
+    if (QFileInfo::exists(path)) return;
+
+    QFile out(path);
+    if (!out.open(QIODevice::WriteOnly | QIODevice::Text)) return;
+    QTextStream(&out) <<
+        ";; Trowel configuration — turmeric manifest syntax.\n"
+        ";; Lines starting with ';;' are comments.\n"
+        ";;\n"
+        ";; :tur-binary   Absolute path to the `tur` executable. Overrides the\n"
+        ";;               bundled binary and PATH. Leave commented to use the\n"
+        ";;               binary shipped inside Trowel.app, falling back to PATH.\n"
+        ";;\n"
+        ";; :tur-binary \"/absolute/path/to/tur\"\n";
+}
+
+ReplSession::Resolution ReplSession::resolveTurBinary(const QString& turBinaryName) {
+    Resolution r;
+
+    // 1. Config-file override — look for `:tur-binary "…"` in
+    //    ~/.config/trowel/config.tur. Turmeric-manifest syntax, so `;;`
+    //    starts a comment. We match one key, not a full sexp parse; if
+    //    Trowel grows more knobs we can graduate to a real reader.
+    const QString configPath = QDir(QDir::homePath()).filePath(".config/trowel/config.tur");
+    QFile configFile(configPath);
+    if (configFile.exists() && configFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        QString body = QTextStream(&configFile).readAll();
+        // Strip `;;` line comments so a commented-out example doesn't win.
+        static const QRegularExpression commentRe(QStringLiteral(";;[^\n]*"));
+        body.remove(commentRe);
+        static const QRegularExpression keyRe(
+            QStringLiteral(R"re(:tur-binary\s+"([^"]+)")re"));
+        const auto match = keyRe.match(body);
+        if (match.hasMatch()) {
+            const QString value = match.captured(1).trimmed();
+            r.preferenceTried = value;
+            const QFileInfo info(value);
+            if (info.isFile() && info.isExecutable()) {
+                r.path = info.absoluteFilePath();
+                r.source = BinarySource::Preference;
+                return r;
+            }
+        }
+    }
+
+    // 2. Bundled binary alongside the Trowel executable.
+    //    macOS bundle: Trowel.app/Contents/MacOS/{trowel,tur}
+    //    Non-bundle:   next to the executable, still worth a look.
+    const QString appDir = QCoreApplication::applicationDirPath();
+    if (!appDir.isEmpty()) {
+        const QString candidate = QDir(appDir).absoluteFilePath(turBinaryName);
+        r.bundledTried = candidate;
+        const QFileInfo info(candidate);
+        if (info.isFile() && info.isExecutable()) {
+            r.path = info.absoluteFilePath();
+            r.source = BinarySource::Bundled;
+            return r;
+        }
+    }
+
+    // 3. PATH lookup — current behavior.
+    const QString onPath = QStandardPaths::findExecutable(turBinaryName);
+    if (!onPath.isEmpty()) {
+        r.path = onPath;
+        r.source = BinarySource::Path;
+        return r;
+    }
+
+    return r;
 }
 
 void ReplSession::start(const QString& workingDir) {
@@ -36,16 +116,24 @@ void ReplSession::start(const QString& workingDir) {
     busy_ = true;
     scanTail_.clear();
 
-    const QString resolved = QStandardPaths::findExecutable(turBinary_);
-    if (resolved.isEmpty()) {
+    const Resolution resolution = resolveTurBinary(turBinary_);
+    if (resolution.path.isEmpty()) {
+        QStringList tried;
+        if (!resolution.preferenceTried.isEmpty()) {
+            tried.append(QString("preference (%1)").arg(resolution.preferenceTried));
+        }
+        if (!resolution.bundledTried.isEmpty()) {
+            tried.append(QString("bundled (%1)").arg(resolution.bundledTried));
+        }
+        tried.append(QString("PATH (`%1`)").arg(turBinary_));
         view_->showBanner(
-            QString("[trowel] `%1` not found on PATH — install turmeric or set its location "
-                    "in preferences. Terminal input is disabled until then.")
-                .arg(turBinary_));
+            QString("[trowel] `%1` not found — tried %2. Install turmeric or set its "
+                    "location in preferences. Terminal input is disabled until then.")
+                .arg(turBinary_, tried.join(", ")));
         return;
     }
 
-    if (!pty_->start(resolved, {"repl"}, workingDir)) {
+    if (!pty_->start(resolution.path, {"repl"}, workingDir)) {
         // startFailed will fire and report.
         return;
     }
