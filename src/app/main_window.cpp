@@ -2,6 +2,7 @@
 
 #include "app/directory_view.h"
 #include "app/icon_font.h"
+#include "app/preferences_view.h"
 #include "app/tab_bar.h"
 #include "app/tab_content.h"
 #include "editor/editor_view.h"
@@ -21,6 +22,7 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QProcess>
 #include <QSettings>
 #include <QDir>
 #include <QSplitter>
@@ -90,6 +92,8 @@ void MainWindow::setupUi() {
 
     setCentralWidget(central);
     resize(1200, 800);
+
+    statusBar()->hide();
 
     connect(tabBar_, &TabBar::activateRequested, this, [this](int idx) {
         activateBuffer(idx);
@@ -182,6 +186,12 @@ void MainWindow::setupMenus() {
     connect(clearReplAction_, &QAction::triggered, this, &MainWindow::clearRepl);
     runMenu->addAction(clearReplAction_);
 
+    formatFileAction_ = new QAction("&Format File", this);
+    formatFileAction_->setShortcut(QKeySequence("Ctrl+Shift+F"));
+    formatFileAction_->setToolTip("Format file with `tur format`");
+    connect(formatFileAction_, &QAction::triggered, this, &MainWindow::formatFile);
+    runMenu->addAction(formatFileAction_);
+
     runMenu->addSeparator();
 
     auto* focusEditorAction = runMenu->addAction("Focus &Editor");
@@ -230,6 +240,10 @@ void MainWindow::setupToolBar() {
         clearReplAction_->setIcon(NerdIcon(NF::Broom, glyphSize, iconColor));
         toolBar_->addAction(clearReplAction_);
     }
+    if (formatFileAction_) {
+        formatFileAction_->setIcon(NerdIcon(NF::AutoFix, glyphSize, iconColor));
+        toolBar_->addAction(formatFileAction_);
+    }
 
     toolBar_->addSeparator();
 
@@ -252,7 +266,7 @@ void MainWindow::setupToolBar() {
     auto* settingsMenu = new QMenu(this);
     auto* trowelSettingsAction = settingsMenu->addAction("Trowel Settings");
     connect(trowelSettingsAction, &QAction::triggered, this,
-            [this]{ openSettingsDirectory(".config/trowel"); });
+            &MainWindow::openPreferences);
     auto* turmericSettingsAction = settingsMenu->addAction("Turmeric Settings");
     connect(turmericSettingsAction, &QAction::triggered, this,
             [this]{ openSettingsDirectory(".config/turmeric"); });
@@ -304,6 +318,9 @@ QString MainWindow::computeDisplayName(const Buffer& buf) const {
     if (buf.view && buf.view->kind() == TabContent::Kind::Directory) {
         const QString name = buf.view->displayName();
         return name.isEmpty() ? QStringLiteral("Directory") : name;
+    }
+    if (buf.view && buf.view->kind() == TabContent::Kind::Preferences) {
+        return buf.view->displayName();
     }
     if (buf.view && !buf.view->filePath().isEmpty()) {
         return QFileInfo(buf.view->filePath()).fileName();
@@ -564,6 +581,7 @@ void MainWindow::updateEditorActionsEnabled() {
     if (saveAsAction_) saveAsAction_->setEnabled(hasEditor);
     if (runBufferAction_) runBufferAction_->setEnabled(hasEditor);
     if (runSelectionAction_) runSelectionAction_->setEnabled(hasEditor);
+    if (formatFileAction_) formatFileAction_->setEnabled(hasEditor);
     if (pickFontAction_) pickFontAction_->setEnabled(hasEditor);
 }
 
@@ -732,6 +750,47 @@ void MainWindow::runSelection() {
     if (!r.ok) statusBar()->showMessage(r.message, 4000);
 }
 
+void MainWindow::formatFile() {
+    EditorView* v = editorView();
+    if (!v) return;
+    const QString binary = ResolveTurBinary();
+    if (binary.isEmpty()) {
+        statusBar()->showMessage("Could not locate `tur` executable.", 4000);
+        return;
+    }
+    QProcess proc;
+    proc.start(binary, {"format"});
+    if (!proc.waitForStarted(3000)) {
+        statusBar()->showMessage("Failed to start `tur format`.", 4000);
+        return;
+    }
+    proc.write(v->text());
+    proc.closeWriteChannel();
+    if (!proc.waitForFinished(10000)) {
+        proc.kill();
+        statusBar()->showMessage("`tur format` timed out.", 4000);
+        return;
+    }
+    if (proc.exitStatus() != QProcess::NormalExit || proc.exitCode() != 0) {
+        const QString err = QString::fromUtf8(proc.readAllStandardError()).trimmed();
+        statusBar()->showMessage(err.isEmpty() ? QString("`tur format` failed.")
+                                               : QString("Format error: %1").arg(err),
+                                 6000);
+        return;
+    }
+    const QByteArray formatted = proc.readAllStandardOutput();
+    if (formatted == v->text()) {
+        statusBar()->showMessage("Already formatted.", 2000);
+        return;
+    }
+    const int caret = v->cursorPos();
+    const int anchor = v->anchorPos();
+    v->setText(formatted);
+    const int len = formatted.size();
+    v->setSelection(qMin(anchor, len), qMin(caret, len));
+    statusBar()->showMessage("Formatted.", 2000);
+}
+
 void MainWindow::focusEditor() {
     if (EditorView* v = editorView()) v->setFocus();
 }
@@ -776,6 +835,49 @@ void MainWindow::openSettingsDirectory(const QString& relPath) {
         }
     }
     openDirectory(abs);
+}
+
+void MainWindow::openPreferences() {
+    for (int i = 0; i < static_cast<int>(buffers_.size()); ++i) {
+        TabContent* v = buffers_[i]->view;
+        if (v && v->kind() == TabContent::Kind::Preferences) {
+            activateBuffer(i);
+            return;
+        }
+    }
+
+    auto* prefs = new PreferencesView(editorStack_);
+
+    // Reuse a fresh, empty, unmodified Untitled editor if available.
+    if (activeIndex_ >= 0 && activeIndex_ < static_cast<int>(buffers_.size())) {
+        Buffer* cur = buffers_[activeIndex_].get();
+        if (cur->view && cur->view->kind() == TabContent::Kind::Editor) {
+            auto* ev = static_cast<EditorView*>(cur->view);
+            if (ev->filePath().isEmpty() && ev->isEmpty() && !ev->isModified()) {
+                editorStack_->addWidget(prefs);
+                editorStack_->removeWidget(ev);
+                ev->deleteLater();
+                cur->view = prefs;
+                cur->untitledIndex = 0;
+                connectBufferSignals(activeIndex_);
+                editorStack_->setCurrentWidget(prefs);
+                updateBufferDisplayName(activeIndex_);
+                updateWindowTitle();
+                updateEditorActionsEnabled();
+                return;
+            }
+        }
+    }
+
+    auto buf = std::make_unique<Buffer>();
+    buf->view = prefs;
+    editorStack_->addWidget(prefs);
+    buf->displayName = computeDisplayName(*buf);
+    buffers_.push_back(std::move(buf));
+    const int newIndex = static_cast<int>(buffers_.size()) - 1;
+    connectBufferSignals(newIndex);
+    activateBuffer(newIndex);
+    refreshTabBar();
 }
 
 QString MainWindow::replWorkingDir() const {

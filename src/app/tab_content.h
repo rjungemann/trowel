@@ -11,7 +11,7 @@ namespace trowel {
 class TabContent : public QWidget {
     Q_OBJECT
 public:
-    enum class Kind { Editor, Directory };
+    enum class Kind { Editor, Directory, Preferences };
 
     explicit TabContent(QWidget* parent = nullptr) : QWidget(parent) {}
 

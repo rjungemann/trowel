@@ -33,6 +33,14 @@ QString bundledTurPath() {
 
 } // namespace
 
+QString ResolveTurBinary() {
+    const QString override = QSettings().value("repl/turBinary").toString();
+    QString resolved = ifExecutable(override);
+    if (resolved.isEmpty()) resolved = ifExecutable(bundledTurPath());
+    if (resolved.isEmpty()) resolved = QStandardPaths::findExecutable("tur");
+    return resolved;
+}
+
 ReplSession::ReplSession(TerminalView* view, QObject* parent)
     : QObject(parent)
     , view_(view)

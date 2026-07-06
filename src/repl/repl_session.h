@@ -8,6 +8,12 @@ namespace trowel {
 class PtySession;
 class TerminalView;
 
+// Resolve the `tur` executable using the same order as ReplSession::start:
+// QSettings "repl/turBinary" override, then bundled binary inside Trowel.app,
+// then PATH lookup. Returns an absolute path, or an empty string when none
+// of the candidates exist and are executable.
+QString ResolveTurBinary();
+
 class ReplSession : public QObject {
     Q_OBJECT
 public:

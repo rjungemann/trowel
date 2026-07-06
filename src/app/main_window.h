@@ -52,6 +52,7 @@ private slots:
     void toggleReplEditorFocus();
     void runBuffer();
     void runSelection();
+    void formatFile();
     void pickFont();
     void openRecentFromAction();
     void toggleSplitOrientation();
@@ -59,6 +60,7 @@ private slots:
     void nextTab();
     void prevTab();
     void closeCurrentTab();
+    void openPreferences();
 
 private:
     struct Buffer {
@@ -111,6 +113,7 @@ private:
     QAction* runSelectionAction_ = nullptr;
     QAction* restartReplAction_ = nullptr;
     QAction* clearReplAction_ = nullptr;
+    QAction* formatFileAction_ = nullptr;
     QAction* toggleSplitAction_ = nullptr;
     QAction* toggleReplAction_ = nullptr;
     QAction* saveAction_ = nullptr;

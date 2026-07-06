@@ -28,6 +28,8 @@ add_library(trowel_lib STATIC
     src/app/icon_font.h
     src/app/main_window.cpp
     src/app/main_window.h
+    src/app/preferences_view.cpp
+    src/app/preferences_view.h
     src/app/tab_bar.cpp
     src/app/tab_bar.h
     src/app/tab_content.h
@@ -73,9 +75,9 @@ if(APPLE)
         MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
     )
 
-    set(TROWEL_TURMERIC_VERSION "v0.26.6")
+    set(TROWEL_TURMERIC_VERSION "v0.27.0")
     set(TROWEL_TURMERIC_SHA256
-        "dcb379b4350f5b81e7015a9be2b9ff57ed13c56d17b72e30001dfb90e140b73a")
+        "06ba3d9d6f7bf80e44b9f1fafdd66d7297266afde4cb6bb2c40c952d7a5b3793")
     set(TROWEL_TURMERIC_URL
         "https://github.com/rjungemann/turmeric/releases/download/${TROWEL_TURMERIC_VERSION}/turmeric-${TROWEL_TURMERIC_VERSION}-macos-arm64.tar.gz")
 
