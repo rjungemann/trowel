@@ -102,4 +102,22 @@ if(APPLE)
             "No prebuilt Turmeric available for host ${CMAKE_HOST_SYSTEM_PROCESSOR}; "
             "Trowel.app will fall back to `tur` on PATH at runtime.")
     endif()
+
+    set(TROWEL_CODESIGN_IDENTITY "" CACHE STRING
+        "Developer ID Application identity (SHA1 or name) used to codesign Trowel.app. Empty disables signing.")
+    set(TROWEL_CODESIGN_ENTITLEMENTS
+        "${CMAKE_SOURCE_DIR}/resources/trowel.entitlements"
+        CACHE FILEPATH
+        "Path to the entitlements plist used when codesigning Trowel.app.")
+
+    if(NOT TROWEL_CODESIGN_IDENTITY STREQUAL "")
+        add_custom_command(TARGET trowel POST_BUILD
+            COMMAND "${CMAKE_SOURCE_DIR}/scripts/codesign-app.sh"
+                "${TROWEL_CODESIGN_IDENTITY}"
+                "${TROWEL_CODESIGN_ENTITLEMENTS}"
+                "$<TARGET_BUNDLE_DIR:trowel>"
+            COMMENT "Codesigning Trowel.app with ${TROWEL_CODESIGN_IDENTITY}"
+            VERBATIM
+        )
+    endif()
 endif()

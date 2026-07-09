@@ -28,7 +28,7 @@ PreferencesView::PreferencesView(QWidget* parent)
     title->setFont(titleFont);
     root->addWidget(title);
 
-    auto* pathLabel = new QLabel(QStringLiteral("Turmeric path:"), this);
+    auto* pathLabel = new QLabel(QStringLiteral("Turmeric path"), this);
     root->addWidget(pathLabel);
 
     turPathEdit_ = new QLineEdit(this);
@@ -58,7 +58,7 @@ PreferencesView::PreferencesView(QWidget* parent)
         "QPushButton:hover { background: %3; }"
     ).arg(theme.editorBg.name(),
           theme.editorFg.name(),
-          theme.selectionBg.name()));
+          theme.lineNumberFg.name()));
 }
 
 void PreferencesView::commitTurmericPath() {
