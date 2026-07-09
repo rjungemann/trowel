@@ -61,8 +61,14 @@ target_compile_options(trowel_lib PRIVATE
     -Wall -Wextra -Wpedantic -Werror
 )
 
+set(TROWEL_APP_ICON "${CMAKE_SOURCE_DIR}/resources/trowel.icns")
+set_source_files_properties("${TROWEL_APP_ICON}" PROPERTIES
+    MACOSX_PACKAGE_LOCATION "Resources"
+)
+
 qt_add_executable(trowel
     src/main.cpp
+    ${TROWEL_APP_ICON}
 )
 target_link_libraries(trowel PRIVATE trowel_lib)
 
@@ -73,6 +79,7 @@ if(APPLE)
         MACOSX_BUNDLE_GUI_IDENTIFIER "com.turmeric.trowel"
         MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
         MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+        MACOSX_BUNDLE_ICON_FILE "trowel.icns"
     )
 
     set(TROWEL_TURMERIC_VERSION "v0.27.0")
