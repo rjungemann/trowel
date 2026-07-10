@@ -26,7 +26,7 @@ Store once:
 
 ```
 xcrun notarytool store-credentials trowel-notary \
-    --apple-id "roger@teamsketchy.com" \
+    --apple-id "rtaljun@gmail.com" \
     --team-id N486ZZ4H36 \
     --password "<app-specific-password>"
 ```

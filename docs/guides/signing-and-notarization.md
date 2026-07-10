@@ -67,15 +67,38 @@ spctl --assess --type execute --verbose build/macos-debug/trowel.app
 
 Signing is enough to launch locally without warnings, but a user who
 downloads the app will hit a Gatekeeper block until the bundle is
-notarized and stapled. See `docs/plans/notarization-plan.md` for the full
-flow; the short version once `scripts/notarize-app.sh` lands:
+notarized and stapled. `scripts/notarize-app.sh` runs the full flow —
+zip with `ditto`, `notarytool submit --wait`, `stapler staple`,
+`stapler validate`, and a final `spctl --assess` gate:
 
 ```
 scripts/notarize-app.sh build/macos-debug/trowel.app trowel-notary
 ```
 
+The submit step blocks on Apple's notary service (typically 1–3 minutes).
+On failure the script fetches the submission log and exits non-zero.
+Re-running against an already-stapled bundle is safe — Apple re-issues a
+ticket and the staple is refreshed.
+
 After stapling, `spctl --assess` reports `source=Notarized Developer ID`
 and the stapled `.app` opens on any Mac without a network round-trip.
+
+### Quarantine dry-run
+
+To simulate what a downloaded copy sees, apply the quarantine attribute
+Safari would set and open it from Finder:
+
+```
+cp -R build/macos-debug/trowel.app /tmp/Trowel.app
+xattr -w com.apple.quarantine \
+    "0083;$(printf '%x' $(date +%s));Safari;" /tmp/Trowel.app
+open /tmp/Trowel.app
+```
+
+A properly notarized bundle launches with no "cannot be opened because
+Apple cannot check it for malicious software" dialog. If that dialog
+appears, the bundle is signed but not notarized (or the staple is
+missing).
 
 ## Troubleshooting
 

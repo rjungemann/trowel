@@ -1,0 +1,114 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build (e.g. v0.1.0). Required for manual runs.'
+        required: true
+
+jobs:
+  macos:
+    name: Build, sign, notarize macOS
+    runs-on: macos-14
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ github.event.inputs.tag || github.ref_name }}
+      CODESIGN_IDENTITY: ${{ secrets.MACOS_CODESIGN_IDENTITY }}
+      MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+      MACOS_KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Strip leading v from tag
+        id: version
+        run: |
+          raw="${VERSION#v}"
+          echo "version=${raw}" >> "$GITHUB_OUTPUT"
+
+      - name: Install build dependencies
+        run: brew install cmake ninja qt@6
+
+      - name: Import Developer ID certificate
+        run: |
+          KEYCHAIN=build.keychain
+          security create-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$KEYCHAIN"
+
+          CERT_PATH="$RUNNER_TEMP/cert.p12"
+          echo "$MACOS_CERTIFICATE" | base64 --decode > "$CERT_PATH"
+          security import "$CERT_PATH" \
+            -k "$KEYCHAIN" \
+            -P "$MACOS_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$MACOS_KEYCHAIN_PASSWORD" "$KEYCHAIN"
+
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '" ')
+          security default-keychain -s "$KEYCHAIN"
+          security find-identity -v -p codesigning "$KEYCHAIN"
+
+      - name: Configure
+        run: |
+          cmake -S . -B build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$(brew --prefix qt@6)" \
+            -DTROWEL_CODESIGN_IDENTITY="$CODESIGN_IDENTITY"
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Store notarization credentials
+        run: |
+          xcrun notarytool store-credentials trowel-notary \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_PASSWORD"
+
+      - name: Notarize and staple
+        run: scripts/notarize-app.sh build/trowel.app trowel-notary
+
+      - name: Package release zip
+        id: package
+        run: |
+          VERSION_STRIPPED='${{ steps.version.outputs.version }}'
+          OUT="dist/Trowel-${VERSION_STRIPPED}.zip"
+          mkdir -p dist
+          rm -f "$OUT"
+          ditto -c -k --keepParent build/trowel.app "$OUT"
+          SHA=$(shasum -a 256 "$OUT" | awk '{print $1}')
+          echo "path=$OUT" >> "$GITHUB_OUTPUT"
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+          echo "## Trowel ${VERSION_STRIPPED}" > dist/notes.md
+          echo "" >> dist/notes.md
+          echo "**SHA-256:** \`$SHA\`" >> dist/notes.md
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.VERSION }}
+          name: Trowel ${{ steps.version.outputs.version }}
+          body_path: dist/notes.md
+          files: ${{ steps.package.outputs.path }}
+          fail_on_unmatched_files: true
+          draft: false
+          prerelease: false
+
+      - name: Clean up keychain
+        if: always()
+        run: security delete-keychain build.keychain || true
