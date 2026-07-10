@@ -6,6 +6,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 <!-- New releases are inserted immediately below this comment. -->
 
+## [0.0.3] -- 2026-07-10
+
+### Internal
+- **VERSION file** -- moved the version source of truth from `CMakeLists.txt` to a top-level `VERSION` file, read at configure time.
+- **Automated cask update** -- the release workflow now edits `Casks/trowel.rb` with the new version and SHA-256 automatically after publishing, and pushes to `main` via a bot commit.
+
 ## [0.0.2] -- 2026-07-10
 
 Initial tagged release of Trowel. Snapshot of the editor as it stands today.
