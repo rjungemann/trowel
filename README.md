@@ -3,7 +3,7 @@
 A native macOS editor for the [Turmeric](https://turmeric-lang.com)
 programming language.
 
-**Latest release:** _none yet — the first tagged release will populate this line._
+**Latest release:** `v0.0.2` — first tagged release of the Trowel editor: Scintilla-based editing, embedded Turmeric REPL, directory view, and a notarized macOS app bundle.
 
 ## Install
 

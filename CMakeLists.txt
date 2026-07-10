@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 project(trowel
-    VERSION 0.0.1
+    VERSION 0.0.2
     DESCRIPTION "Trowel — a native editor for turmeric"
     LANGUAGES CXX)
 
