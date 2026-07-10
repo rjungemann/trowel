@@ -48,6 +48,16 @@ jobs:
           security set-keychain-settings -lut 21600 "$KEYCHAIN"
           security unlock-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$KEYCHAIN"
 
+          echo "==> Installing Apple intermediate CAs"
+          curl -fsSL -o "$RUNNER_TEMP/AppleWWDRCAG3.cer"    https://www.apple.com/certificateauthority/AppleWWDRCAG3.cer
+          curl -fsSL -o "$RUNNER_TEMP/DeveloperIDG2CA.cer"  https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
+          curl -fsSL -o "$RUNNER_TEMP/AppleRootCA-G2.cer"   https://www.apple.com/certificateauthority/AppleRootCA-G2.cer
+          curl -fsSL -o "$RUNNER_TEMP/AppleRootCA-G3.cer"   https://www.apple.com/certificateauthority/AppleRootCA-G3.cer
+          for cer in "$RUNNER_TEMP"/*.cer; do
+            security import "$cer" -k "$KEYCHAIN" -T /usr/bin/codesign || true
+          done
+
+          echo "==> Importing Developer ID certificate"
           CERT_PATH="$RUNNER_TEMP/cert.p12"
           echo "$MACOS_CERTIFICATE" | base64 --decode > "$CERT_PATH"
           security import "$CERT_PATH" \
@@ -56,12 +66,16 @@ jobs:
             -T /usr/bin/codesign
           security set-key-partition-list \
             -S apple-tool:,apple:,codesign: \
-            -s -k "$MACOS_KEYCHAIN_PASSWORD" "$KEYCHAIN"
+            -s -k "$MACOS_KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
 
           LOGIN_KC="$HOME/Library/Keychains/login.keychain-db"
           security list-keychains -d user -s "$KEYCHAIN" "$LOGIN_KC"
           security default-keychain -s "$KEYCHAIN"
-          security find-identity -v -p codesigning
+
+          echo "==> All identities in $KEYCHAIN"
+          security find-identity -v "$KEYCHAIN"
+          echo "==> Codesigning-valid identities in $KEYCHAIN"
+          security find-identity -v -p codesigning "$KEYCHAIN"
           echo "KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
 
       - name: Configure
