@@ -43,7 +43,7 @@ jobs:
 
       - name: Import Developer ID certificate
         run: |
-          KEYCHAIN=build.keychain
+          KEYCHAIN="$RUNNER_TEMP/build.keychain-db"
           security create-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$KEYCHAIN"
           security set-keychain-settings -lut 21600 "$KEYCHAIN"
           security unlock-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$KEYCHAIN"
@@ -58,9 +58,11 @@ jobs:
             -S apple-tool:,apple:,codesign: \
             -s -k "$MACOS_KEYCHAIN_PASSWORD" "$KEYCHAIN"
 
-          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '" ')
+          LOGIN_KC="$HOME/Library/Keychains/login.keychain-db"
+          security list-keychains -d user -s "$KEYCHAIN" "$LOGIN_KC"
           security default-keychain -s "$KEYCHAIN"
-          security find-identity -v -p codesigning "$KEYCHAIN"
+          security find-identity -v -p codesigning
+          echo "KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
 
       - name: Configure
         run: |
@@ -71,7 +73,13 @@ jobs:
             -DTROWEL_CODESIGN_IDENTITY="$CODESIGN_IDENTITY"
 
       - name: Build
-        run: cmake --build build
+        run: |
+          LOGIN_KC="$HOME/Library/Keychains/login.keychain-db"
+          security list-keychains -d user -s "$KEYCHAIN" "$LOGIN_KC"
+          security default-keychain -s "$KEYCHAIN"
+          security unlock-keychain -p "$MACOS_KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security find-identity -v -p codesigning
+          cmake --build build
 
       - name: Store notarization credentials
         run: |
@@ -111,4 +119,7 @@ jobs:
 
       - name: Clean up keychain
         if: always()
-        run: security delete-keychain build.keychain || true
+        run: |
+          if [ -n "${KEYCHAIN:-}" ]; then
+            security delete-keychain "$KEYCHAIN" || true
+          fi
