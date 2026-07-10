@@ -1,5 +1,5 @@
 ---
-description: Cut a new major release. Bump CMakeLists version, update CHANGELOG + README, tag, push.
+description: Cut a new major release. Bump VERSION file, update CHANGELOG + README, tag, push.
 argument-hint: (no arguments)
 allowed-tools: Bash, Read, Edit, AskUserQuestion
 ---
@@ -13,8 +13,8 @@ must contain the bumped version + CHANGELOG + README before the tag is
 created, and the tag push must include the bump commit so the GitHub
 Actions release workflow builds against the right sources.
 
-The source of truth for the version is `CMakeLists.txt` line 3:
-`project(trowel VERSION X.Y.Z ...)`. There is no separate VERSION file.
+The source of truth for the version is the `VERSION` file at the repo
+root. `CMakeLists.txt` reads that file and passes the value to `project()`.
 
 ## Preconditions (verify before doing anything destructive)
 
@@ -27,8 +27,7 @@ Run these in parallel and report findings before proceeding:
 3. `git fetch origin main` followed by
    `git rev-list --left-right --count origin/main...HEAD` -- local main
    must not be behind origin. If behind, stop and ask the user to pull.
-4. Read `CMakeLists.txt` and extract the current version from the
-   `project(trowel VERSION X.Y.Z ...)` line.
+4. `cat VERSION` -- the current version (a single `MAJOR.MINOR.PATCH` line).
 5. `git describe --tags --abbrev=0 --match 'v[0-9]*'` -- the most recent
    non-test release tag (`v*` matches test tags too; filter to numeric).
    Should match `v<CURRENT>` unless this is the first real release. If
@@ -42,7 +41,7 @@ explicitly overriding.
 
 ## Step 1: Compute the new version
 
-Parse `MAJOR.MINOR.PATCH` from `CMakeLists.txt`. Compute
+Parse `MAJOR.MINOR.PATCH` from `VERSION`. Compute
 `NEW = (MAJOR+1).0.0`.
 
 Example: `0.9.3` -> `1.0.0`.
@@ -122,8 +121,7 @@ Do not proceed past this step without explicit confirmation.
 ## Step 5: Apply file changes (no git operations yet)
 
 In parallel:
-1. Edit `CMakeLists.txt` -- change `VERSION <OLD>` to `VERSION <NEW>` on
-   the `project(trowel ...)` line.
+1. Write `<NEW>\n` to `VERSION` (single line, trailing newline).
 2. Edit `CHANGELOG.md` -- insert the new entry immediately after the
    `<!-- New releases are inserted immediately below this comment. -->`
    marker and before any existing `## [<OLD>]` entry. Keep one blank
@@ -136,7 +134,7 @@ Do not commit yet.
 ## Step 6: Commit and tag locally
 
 ```sh
-git add CMakeLists.txt CHANGELOG.md README.md
+git add VERSION CHANGELOG.md README.md
 git commit -m "$(cat <<'EOF'
 chore: release v<NEW>
 
@@ -179,8 +177,9 @@ End by reporting:
 - The commit SHA of the bump commit
 - The Release workflow run URL
 - A reminder that the release page will populate with `Trowel-<NEW>.zip`
-  once the workflow finishes, and that the Cask's `sha256` needs to be
-  updated from the release notes.
+  once the workflow finishes, and that the workflow will automatically
+  commit an updated `Casks/trowel.rb` to `main` with the new version and
+  sha256 -- no manual cask edit needed.
 
 ## Things to refuse
 

@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.24)
+
+file(READ "${CMAKE_SOURCE_DIR}/VERSION" TROWEL_VERSION_RAW)
+string(STRIP "${TROWEL_VERSION_RAW}" TROWEL_VERSION)
+
 project(trowel
-    VERSION 0.0.2
+    VERSION ${TROWEL_VERSION}
     DESCRIPTION "Trowel — a native editor for turmeric"
     LANGUAGES CXX)
 

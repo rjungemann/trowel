@@ -131,6 +131,56 @@ jobs:
           draft: false
           prerelease: false
 
+      - name: Update Homebrew cask on main
+        env:
+          NEW_VERSION: ${{ steps.version.outputs.version }}
+          NEW_SHA: ${{ steps.package.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          CASK=Casks/trowel.rb
+
+          # Work on a fresh checkout of main so the tagged-ref checkout above
+          # doesn't turn into a detached-HEAD push. Use the token the
+          # workflow already has (contents: write).
+          git config user.name "trowel-release-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git fetch origin main
+          git checkout -B main origin/main
+
+          python3 - "$CASK" "$NEW_VERSION" "$NEW_SHA" <<'PY'
+          import re, sys, pathlib
+          path, version, sha = sys.argv[1], sys.argv[2], sys.argv[3]
+          p = pathlib.Path(path)
+          src = p.read_text()
+          src = re.sub(r'^(\s*version\s+)"[^"]*"', rf'\1"{version}"', src, count=1, flags=re.M)
+          src = re.sub(r'^(\s*sha256\s+)"[^"]*"', rf'\1"{sha}"',    src, count=1, flags=re.M)
+          p.write_text(src)
+          PY
+
+          if git diff --quiet -- "$CASK"; then
+              echo "cask already up to date; nothing to commit"
+              exit 0
+          fi
+
+          git add "$CASK"
+          git commit -m "chore: update cask for v${NEW_VERSION}
+
+          Automated cask bump from the release workflow. Points at
+          Trowel-${NEW_VERSION}.zip with SHA-256 ${NEW_SHA}."
+
+          # Small retry loop in case someone pushed to main between the
+          # tag build starting and this commit landing.
+          for attempt in 1 2 3; do
+              if git push origin main; then
+                  exit 0
+              fi
+              echo "push failed (attempt $attempt), rebasing on latest main"
+              git fetch origin main
+              git rebase origin/main
+          done
+          echo "failed to push cask update after 3 attempts" >&2
+          exit 1
+
       - name: Clean up keychain
         if: always()
         run: |
