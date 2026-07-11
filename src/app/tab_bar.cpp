@@ -184,10 +184,16 @@ void TabBar::paintEvent(QPaintEvent*) {
     for (int i = 0; i < static_cast<int>(geoms_.size()); ++i) {
         const TabGeom& g = geoms_[i];
 
-        // Divider on the right edge of every tab, including the last.
-        p.setPen(divider_);
-        p.drawLine(g.rect.right(), kDividerMarginY,
-                   g.rect.right(), height() - kDividerMarginY - 1);
+        // Divider on the right edge of every tab. Skip drawing the last
+        // one when the bar is scrollable so it doesn't butt up against
+        // the clipped right edge.
+        const bool isLast = (i + 1 == static_cast<int>(geoms_.size()));
+        const bool scrollable = maxScrollOffset() > 0;
+        if (!(isLast && scrollable)) {
+            p.setPen(divider_);
+            p.drawLine(g.rect.right(), kDividerMarginY,
+                       g.rect.right(), height() - kDividerMarginY - 1);
+        }
 
         // Label: centered in the text area (excluding close slot).
         QRect textRect = g.rect.adjusted(kHPad, 0, -kCloseSlot, -2);
