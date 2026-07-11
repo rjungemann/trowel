@@ -184,12 +184,10 @@ void TabBar::paintEvent(QPaintEvent*) {
     for (int i = 0; i < static_cast<int>(geoms_.size()); ++i) {
         const TabGeom& g = geoms_[i];
 
-        // Divider on the right edge of each tab (except last).
-        if (i + 1 < static_cast<int>(geoms_.size())) {
-            p.setPen(divider_);
-            p.drawLine(g.rect.right(), kDividerMarginY,
-                       g.rect.right(), height() - kDividerMarginY - 1);
-        }
+        // Divider on the right edge of every tab, including the last.
+        p.setPen(divider_);
+        p.drawLine(g.rect.right(), kDividerMarginY,
+                   g.rect.right(), height() - kDividerMarginY - 1);
 
         // Label: centered in the text area (excluding close slot).
         QRect textRect = g.rect.adjusted(kHPad, 0, -kCloseSlot, -2);
