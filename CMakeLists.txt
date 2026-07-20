@@ -102,9 +102,9 @@ if(APPLE)
         VERBATIM
     )
 
-    set(TROWEL_TURMERIC_VERSION "v0.27.0")
+    set(TROWEL_TURMERIC_VERSION "v0.29.1")
     set(TROWEL_TURMERIC_SHA256
-        "06ba3d9d6f7bf80e44b9f1fafdd66d7297266afde4cb6bb2c40c952d7a5b3793")
+        "0c6a9f46b86b68b3e92226ca293b476e2a42f4b1c05b1a5da31b2a6399155500")
     set(TROWEL_TURMERIC_URL
         "https://github.com/rjungemann/turmeric/releases/download/${TROWEL_TURMERIC_VERSION}/turmeric-${TROWEL_TURMERIC_VERSION}-macos-arm64.tar.gz")
 
