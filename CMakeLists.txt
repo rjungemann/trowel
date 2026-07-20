@@ -37,6 +37,8 @@ add_library(trowel_lib STATIC
     src/app/tab_bar.cpp
     src/app/tab_bar.h
     src/app/tab_content.h
+    src/app/trowel_application.cpp
+    src/app/trowel_application.h
     src/editor/editor_view.cpp
     src/editor/editor_view.h
     src/editor/turmeric_lexer.cpp
@@ -84,6 +86,20 @@ if(APPLE)
         MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
         MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
         MACOSX_BUNDLE_ICON_FILE "trowel.icns"
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/resources/Info.plist.in"
+    )
+
+    # Ship the `trowel` CLI shim inside the bundle so Homebrew's cask can
+    # symlink it onto PATH. This must run BEFORE codesigning below — the
+    # bundle signature seals Contents/Resources, so staging afterwards would
+    # invalidate the signature. POST_BUILD commands run in the order added.
+    add_custom_command(TARGET trowel POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy
+            "${CMAKE_SOURCE_DIR}/resources/trowel-cli.sh"
+            "$<TARGET_BUNDLE_CONTENT_DIR:trowel>/Resources/trowel"
+        COMMAND chmod +x "$<TARGET_BUNDLE_CONTENT_DIR:trowel>/Resources/trowel"
+        COMMENT "Staging trowel CLI shim into app bundle"
+        VERBATIM
     )
 
     set(TROWEL_TURMERIC_VERSION "v0.27.0")

@@ -6,3 +6,8 @@ compile_commands.json
 .DS_Store
 .vscode/
 .idea/
+
+# Python (smoke tests)
+__pycache__/
+*.py[cod]
+.pytest_cache/

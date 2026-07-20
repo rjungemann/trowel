@@ -7,9 +7,10 @@ cask "trowel" do
   desc "IDE for the Turmeric programming language"
   homepage "https://github.com/rjungemann/trowel"
 
-  depends_on macos: ">= :monterey"
+  depends_on macos: :monterey
 
   app "Trowel.app"
+  binary "#{appdir}/Trowel.app/Contents/Resources/trowel"
 
   zap trash: [
     "~/Library/Preferences/com.turmeric-lang.TrowelEditor.plist",

@@ -1,4 +1,5 @@
 #include "app/main_window.h"
+#include "app/trowel_application.h"
 #include "control/control_server.h"
 
 #include <QApplication>
@@ -12,7 +13,7 @@ int main(int argc, char** argv) {
     // linker to pull in qrc_resources.o so `:/themes/...` is registered.
     Q_INIT_RESOURCE(resources);
 
-    QApplication app(argc, argv);
+    trowel::TrowelApplication app(argc, argv);
     QApplication::setApplicationName("Trowel");
     QApplication::setOrganizationName("turmeric");
     QApplication::setApplicationVersion("0.0.1");
@@ -34,10 +35,17 @@ int main(int argc, char** argv) {
     parser.process(app);
 
     trowel::MainWindow window;
+
+    // Attach the window so macOS "open document" requests (QEvent::FileOpen,
+    // e.g. from the `trowel` CLI shim or Finder) open as tabs. This also
+    // flushes any requests that arrived during startup, before the window
+    // existed.
+    app.setMainWindow(&window);
+
     const auto positional = parser.positionalArguments();
     if (!positional.isEmpty()) {
         window.openPath(positional.first());
-    } else {
+    } else if (!app.hadPendingOpens()) {
         const QString lastFile = QSettings().value("lastFile").toString();
         if (!lastFile.isEmpty() && QFileInfo::exists(lastFile)) {
             window.openPath(lastFile);

@@ -3,6 +3,8 @@
 A native macOS editor for the [Turmeric](https://turmeric-lang.com)
 programming language.
 
+<img src="docs/images/screenshot.png" alt="Trowel editing a Turmeric source file" width="400">
+
 **Latest release:** `v0.0.3` — release-tooling patch: version now lives in a `VERSION` file and the Homebrew cask is updated automatically after publishing.
 
 ## Install
