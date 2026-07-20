@@ -6,6 +6,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 <!-- New releases are inserted immediately below this comment. -->
 
+## [0.0.4] -- 2026-07-19
+
+### Added
+- **`trowel` CLI command** -- Homebrew now installs a `trowel` launcher (like `code`) that opens files as new tabs in the running Trowel window; passing multiple files opens multiple tabs.
+- **macOS document types** -- Trowel registers as an editor for `.tur` and `.tur.sweet` files, so you can double-click them in Finder or use "Open With".
+
+### Changed
+- **Bundled Turmeric v0.29.1** -- updated the embedded `tur` compiler/REPL from v0.27.0 to v0.29.1.
+
+### Fixed
+- **Tab bar borders** -- the last tab is now closed off with a border, and the trailing border is hidden when the tab bar is scrollable.
+
 ## [0.0.3] -- 2026-07-10
 
 ### Internal
