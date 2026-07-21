@@ -5,7 +5,7 @@ programming language, for macOS and Linux.
 
 <img src="docs/images/screenshot.png" alt="Trowel editing a Turmeric source file" width="400">
 
-**Latest release:** `v0.0.4` — adds a `trowel` CLI command that opens files as tabs in the running editor, registers `.tur` files with macOS, and bundles Turmeric v0.29.1.
+**Latest release:** `v0.0.5` — brings Trowel to Linux as a self-contained AppImage (x86_64 and aarch64) with desktop integration and single-instance file forwarding, and bundles Turmeric v0.30.2.
 
 ## Install
 

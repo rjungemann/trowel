@@ -6,6 +6,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 <!-- New releases are inserted immediately below this comment. -->
 
+## [0.0.5] -- 2026-07-21
+
+### Added
+- **Linux support** -- Trowel now runs on Linux, distributed as a self-contained `Trowel-<version>-<arch>.AppImage` (x86_64 and aarch64) that bundles Qt, Turmeric, and libedit; the release workflow builds and publishes these alongside the macOS bundle.
+- **Desktop integration (Linux)** -- ships a `.desktop` launcher, XDG MIME registration for `.tur`/`.sweet` files, AppStream metainfo, and a hicolor icon set.
+- **Single-instance forwarding (Linux)** -- a second `trowel foo.tur` forwards its files to the running window over the control socket and opens them as tabs, mirroring the macOS behavior.
+
+### Changed
+- **Bundled Turmeric v0.30.2** -- updated the embedded `tur` compiler/REPL from v0.29.1 to v0.30.2.
+
 ## [0.0.4] -- 2026-07-19
 
 ### Added
