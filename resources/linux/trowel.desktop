@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Trowel
+GenericName=Turmeric Editor
+Comment=A native editor for the Turmeric programming language
+Exec=trowel %F
+TryExec=trowel
+Icon=trowel
+Terminal=false
+Categories=Development;IDE;TextEditor;
+MimeType=text/x-turmeric;
+Keywords=Turmeric;Lisp;tur;editor;
+StartupNotify=true
+StartupWMClass=trowel

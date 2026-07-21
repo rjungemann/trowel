@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- shared-mime-info definition for Turmeric source files. Mirrors the
+     CFBundleDocumentTypes entry in resources/Info.plist.in (.tur / .sweet). -->
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="text/x-turmeric">
+    <comment>Turmeric source code</comment>
+    <sub-class-of type="text/plain"/>
+    <glob pattern="*.tur"/>
+    <glob pattern="*.sweet"/>
+    <icon name="text-x-turmeric"/>
+  </mime-type>
+</mime-info>
