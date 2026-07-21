@@ -1,6 +1,6 @@
 cask "trowel" do
-  version "0.0.4"
-  sha256 "6a4c294d8e7b32621fe0acd80a469f886cdcb7a2b51e0a2cf343e967d67cce1a"
+  version "0.0.5"
+  sha256 "6e3cf996c74326dfdcb167597a92a3c2f9964385fb8b072469702044e4af24ff"
 
   url "https://github.com/rjungemann/trowel/releases/download/v#{version}/Trowel-#{version}.zip"
   name "Trowel"
