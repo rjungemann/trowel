@@ -22,7 +22,32 @@ from typing import Any, Iterator
 import pytest
 
 REPO = Path(__file__).resolve().parents[2]
-BIN = REPO / "build" / "macos-debug" / "trowel.app" / "Contents" / "MacOS" / "trowel"
+
+
+def _resolve_bin() -> Path:
+    """Locate the built trowel binary for the host platform.
+
+    Honors $TROWEL_BIN, then falls back to the per-preset build layout used by
+    the Justfile: a macOS .app bundle on Darwin, a plain ELF binary elsewhere.
+    """
+    override = os.environ.get("TROWEL_BIN")
+    if override:
+        return Path(override)
+    if sys.platform == "darwin":
+        for preset in ("macos-debug", "macos-release"):
+            cand = REPO / "build" / preset / "trowel.app" / "Contents" / "MacOS" / "trowel"
+            if cand.exists():
+                return cand
+        preset = "macos-debug"
+        return REPO / "build" / preset / "trowel.app" / "Contents" / "MacOS" / "trowel"
+    for preset in ("linux-debug", "linux-release"):
+        cand = REPO / "build" / preset / "trowel"
+        if cand.exists():
+            return cand
+    return REPO / "build" / "linux-debug" / "trowel"
+
+
+BIN = _resolve_bin()
 FIXTURES = Path(__file__).parent / "fixtures"
 ARTIFACTS = Path(__file__).parent / "artifacts"
 

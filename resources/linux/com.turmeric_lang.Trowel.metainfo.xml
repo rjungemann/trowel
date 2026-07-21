@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metainfo for Trowel. Filename matches the component id (required
+     by appstreamcli, which appimagetool runs). The rDNS id uses an underscore
+     for the hyphenated domain (turmeric-lang.com) per AppStream convention. -->
+<component type="desktop-application">
+  <id>com.turmeric_lang.Trowel</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <name>Trowel</name>
+  <summary>A native editor for the Turmeric programming language</summary>
+  <developer id="com.turmeric_lang">
+    <name>Turmeric</name>
+  </developer>
+  <description>
+    <p>
+      Trowel is a native editor for the Turmeric programming language. It offers
+      Turmeric syntax highlighting, an integrated REPL, and run-file support, and
+      bundles the Turmeric toolchain so it works out of the box.
+    </p>
+  </description>
+  <launchable type="desktop-id">trowel.desktop</launchable>
+  <provides>
+    <binary>trowel</binary>
+  </provides>
+  <categories>
+    <category>Development</category>
+    <category>IDE</category>
+  </categories>
+  <url type="homepage">https://turmeric-lang.com</url>
+  <content_rating type="oars-1.1"/>
+</component>

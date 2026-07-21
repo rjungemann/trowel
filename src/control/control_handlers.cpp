@@ -151,6 +151,15 @@ void HandleWindowFocus(MainWindow* w, const QJsonObject& args, const Reply& repl
     ReplyErr(reply, "bad_pane", QString("unknown pane: %1").arg(pane));
 }
 
+void HandleWindowActivate(MainWindow* w, const QJsonObject&, const Reply& reply) {
+    // Mirror TrowelApplication::openFile()'s raise sequence so a forwarded
+    // single-instance request brings the existing window to the front.
+    w->show();
+    w->raise();
+    w->activateWindow();
+    reply(Ok(), nullptr);
+}
+
 void HandleWindowGeometry(MainWindow* w, const QJsonObject&, const Reply& reply) {
     QJsonObject o;
     const QRect g = w->geometry();
@@ -527,6 +536,7 @@ void Dispatch(MainWindow* w, QPointer<ControlConnection> conn,
 
     if (cmd == "ping") { QJsonObject o; o["pong"] = true; reply(o, nullptr); return; }
 
+    if (cmd == "window.activate")      { HandleWindowActivate(w, args, reply); return; }
     if (cmd == "window.focus")         { HandleWindowFocus(w, args, reply); return; }
     if (cmd == "window.geometry")      { HandleWindowGeometry(w, args, reply); return; }
     if (cmd == "window.set_splitter")  { HandleWindowSetSplitter(w, args, reply); return; }
