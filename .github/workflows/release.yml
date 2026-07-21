@@ -187,3 +187,71 @@ jobs:
           if [ -n "${KEYCHAIN:-}" ]; then
             security delete-keychain "$KEYCHAIN" || true
           fi
+
+  linux:
+    name: Build AppImage (${{ matrix.arch }})
+    # Gate behind the macOS job, which creates the GitHub Release. These jobs
+    # then only append their AppImage assets, so there's no create-vs-update
+    # race on the release. (If you ever want Linux to ship even when macOS
+    # fails, split the release-creation into its own job like Turmeric does.)
+    needs: macos
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    env:
+      VERSION: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build g++ curl file desktop-file-utils \
+            qt6-base-dev qt6-base-dev-tools qt6-5compat-dev libqt6core5compat6 \
+            libgl1-mesa-dev libxkbcommon-dev \
+            libedit2
+
+      - name: Build AppImage
+        run: scripts/build-appimage.sh ${{ matrix.arch }}
+
+      - name: Smoke-test the AppImage (headless, bundled Qt + Turmeric)
+        run: |
+          python3 -m venv /tmp/smoke-venv
+          /tmp/smoke-venv/bin/pip install -q pytest
+          APP=$(ls dist/Trowel-*-${{ matrix.arch }}.AppImage)
+          ( cd "$RUNNER_TEMP" && APPIMAGE_EXTRACT_AND_RUN=1 "$GITHUB_WORKSPACE/$APP" --appimage-extract >/dev/null )
+          cd tests/smoke
+          env -u TUR_STDLIB_DIR \
+            TROWEL_BIN="$RUNNER_TEMP/squashfs-root/AppRun" \
+            PATH="/usr/bin:/bin" \
+            /tmp/smoke-venv/bin/python -m pytest -q
+
+      - name: Checksum
+        id: pkg
+        run: |
+          APP=$(ls dist/Trowel-*-${{ matrix.arch }}.AppImage)
+          sha256sum "$APP" | awk '{print $1}' > "${APP}.sha256"
+          echo "path=$APP" >> "$GITHUB_OUTPUT"
+          echo "sha=$(cat "${APP}.sha256")" >> "$GITHUB_OUTPUT"
+
+      - name: Publish AppImage to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.VERSION }}
+          files: |
+            ${{ steps.pkg.outputs.path }}
+            ${{ steps.pkg.outputs.path }}.sha256
+          fail_on_unmatched_files: true
