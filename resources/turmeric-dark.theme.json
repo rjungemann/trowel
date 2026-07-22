@@ -52,6 +52,14 @@
         "curlyInfix":     { "fg": "#5A5448" },
         "neotericCall":   { "fg": "#C4A0E8" },
         "identifier":     { "fg": "#EAE0D2" },
-        "invalid":        { "fg": "#D9735A", "bold": true }
+        "invalid":        { "fg": "#D9735A", "bold": true },
+        "rainbow0":       { "fg": "#EFA030" },
+        "rainbow1":       { "fg": "#D7C94A" },
+        "rainbow2":       { "fg": "#A8C98A" },
+        "rainbow3":       { "fg": "#7AC4B8" },
+        "rainbow4":       { "fg": "#8AB0E8" },
+        "rainbow5":       { "fg": "#C4A0E8" },
+        "rainbow6":       { "fg": "#E58AAE" },
+        "bracketError":   { "fg": "#FF5C57", "bold": true }
     }
 }

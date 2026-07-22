@@ -82,6 +82,14 @@ const QHash<QString, TurStyle>& StyleKeyMap() {
         {"neotericCall", TurStyle::NeotericCall},
         {"identifier",   TurStyle::Identifier},
         {"invalid",      TurStyle::Invalid},
+        {"rainbow0",     TurStyle::Rainbow0},
+        {"rainbow1",     TurStyle::Rainbow1},
+        {"rainbow2",     TurStyle::Rainbow2},
+        {"rainbow3",     TurStyle::Rainbow3},
+        {"rainbow4",     TurStyle::Rainbow4},
+        {"rainbow5",     TurStyle::Rainbow5},
+        {"rainbow6",     TurStyle::Rainbow6},
+        {"bracketError", TurStyle::BracketError},
     };
     return m;
 }

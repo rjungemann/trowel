@@ -61,6 +61,7 @@ private slots:
     void prevTab();
     void closeCurrentTab();
     void openPreferences();
+    void applyRainbowBrackets(bool enabled);
 
 private:
     struct Buffer {
