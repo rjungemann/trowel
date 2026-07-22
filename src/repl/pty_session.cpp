@@ -29,7 +29,8 @@ PtySession::~PtySession() {
     terminate();
 }
 
-bool PtySession::start(const QString& program, const QStringList& args, const QString& workingDir) {
+bool PtySession::start(const QString& program, const QStringList& args,
+                       const QString& workingDir, const QStringList& extraEnv) {
     if (isRunning()) return false;
 
     struct termios term{};
@@ -56,6 +57,18 @@ bool PtySession::start(const QString& program, const QStringList& args, const QS
             }
         }
         setenv("TERM", "xterm-256color", 1);
+
+        // Apply caller-supplied "KEY=VALUE" overrides (e.g. TUR_STDLIB_DIR
+        // pinned to the launched binary's stdlib), overwriting any inherited
+        // value so a stale mise export can't point a bundled `tur` at the
+        // wrong stdlib.
+        for (const auto& kv : extraEnv) {
+            const int eq = kv.indexOf('=');
+            if (eq <= 0) continue;
+            const QByteArray key = kv.left(eq).toUtf8();
+            const QByteArray val = kv.mid(eq + 1).toUtf8();
+            setenv(key.constData(), val.constData(), 1);
+        }
 
         std::vector<QByteArray> argStorage;
         argStorage.reserve(args.size() + 1);

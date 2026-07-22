@@ -13,7 +13,10 @@ public:
     explicit PtySession(QObject* parent = nullptr);
     ~PtySession() override;
 
-    bool start(const QString& program, const QStringList& args, const QString& workingDir = {});
+    // `extraEnv` holds "KEY=VALUE" entries applied (overwriting) in the child
+    // before exec — used to pin TUR_STDLIB_DIR to the launched binary's stdlib.
+    bool start(const QString& program, const QStringList& args,
+               const QString& workingDir = {}, const QStringList& extraEnv = {});
     bool isRunning() const { return pid_ > 0; }
 
     void write(const QByteArray& bytes);

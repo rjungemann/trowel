@@ -93,7 +93,21 @@ void ReplSession::start(const QString& workingDir) {
         return;
     }
 
-    if (!pty_->start(resolved, {"repl"}, workingDir)) {
+    // Pin the stdlib to whichever `tur` we resolved: each release ships `tur`
+    // and `stdlib/` side by side, so use the stdlib next to the chosen binary.
+    // This keeps binary and stdlib in the same version even when the ambient
+    // environment (e.g. a mise `TUR_STDLIB_DIR` export pinning an older
+    // toolchain) would otherwise leak in and cause a version mismatch. Only
+    // override when that sibling stdlib actually exists — a bare shim without an
+    // adjacent stdlib falls through to the inherited environment.
+    QStringList extraEnv;
+    const QString siblingStdlib =
+        QFileInfo(resolved).absolutePath() + QStringLiteral("/stdlib");
+    if (QDir(siblingStdlib).exists()) {
+        extraEnv << QStringLiteral("TUR_STDLIB_DIR=") + siblingStdlib;
+    }
+
+    if (!pty_->start(resolved, {"repl"}, workingDir, extraEnv)) {
         // startFailed will fire and report.
         return;
     }
