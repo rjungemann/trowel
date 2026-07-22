@@ -5,7 +5,7 @@ programming language, for macOS and Linux.
 
 <img src="docs/images/screenshot.png" alt="Trowel editing a Turmeric source file" width="400">
 
-**Latest release:** `v0.0.7` — bundles Turmeric v0.30.4.
+**Latest release:** `v0.0.8` — fixes a crash when launching Trowel.app from Finder by bundling Qt inside the app.
 
 ## Install
 

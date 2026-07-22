@@ -6,6 +6,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 <!-- New releases are inserted immediately below this comment. -->
 
+## [0.0.8] -- 2026-07-22
+
+### Fixed
+- **Crash launching from Finder** -- the macOS app now bundles the Qt frameworks and plugins inside `Trowel.app` (via `macdeployqt`) and code-signs them with the app's Developer ID. Previously the notarized binary still referenced the build machine's Homebrew Qt, so a Finder launch aborted before startup with a "Library not loaded / different Team IDs" dyld error. Launching from the CLI happened to mask the bug.
+
 ## [0.0.7] -- 2026-07-22
 
 ### Changed
