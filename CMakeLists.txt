@@ -176,6 +176,34 @@ if(APPLE)
         "Path to the entitlements plist used when codesigning Trowel.app.")
 
     if(NOT TROWEL_CODESIGN_IDENTITY STREQUAL "")
+        # Bundle the Qt frameworks (and platform/style plugins) INTO the app so
+        # it is self-contained. Without this the notarized binary keeps its
+        # build-machine LC_LOAD_DYLIB paths into Homebrew's /opt/homebrew Qt,
+        # which a Finder launch either can't find or — because Homebrew's Qt is
+        # ad-hoc signed with a different Team ID — is refused from loading under
+        # the hardened runtime, aborting before main(). macdeployqt copies the
+        # frameworks under Contents/Frameworks + Contents/PlugIns and rewrites
+        # the install names to @rpath. It runs BEFORE codesign below (POST_BUILD
+        # commands run in the order added) so codesign-app.sh re-signs the
+        # freshly bundled frameworks and plugins with our Developer ID.
+        #
+        # Locate macdeployqt next to qmake rather than trusting PATH, so a build
+        # that found Qt via CMAKE_PREFIX_PATH uses that same Qt's tool.
+        get_target_property(_trowel_qmake_loc Qt6::qmake IMPORTED_LOCATION)
+        get_filename_component(_trowel_qt_bin_dir "${_trowel_qmake_loc}" DIRECTORY)
+        find_program(MACDEPLOYQT_EXECUTABLE
+            NAMES macdeployqt
+            HINTS "${_trowel_qt_bin_dir}"
+            REQUIRED)
+
+        add_custom_command(TARGET trowel POST_BUILD
+            COMMAND "${MACDEPLOYQT_EXECUTABLE}"
+                "$<TARGET_BUNDLE_DIR:trowel>"
+                -no-strip
+            COMMENT "Bundling Qt frameworks into Trowel.app with macdeployqt"
+            VERBATIM
+        )
+
         add_custom_command(TARGET trowel POST_BUILD
             COMMAND "${CMAKE_SOURCE_DIR}/scripts/codesign-app.sh"
                 "${TROWEL_CODESIGN_IDENTITY}"

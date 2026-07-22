@@ -59,18 +59,31 @@ if [[ -d "$FRAMEWORKS_DIR" ]]; then
     done < <(find "$FRAMEWORKS_DIR" -type f -name '*.dylib' -print0)
 fi
 
-# 3. Main executable.
+# 3. Qt plugins dropped by macdeployqt (Contents/PlugIns/**/*.dylib), e.g. the
+#    cocoa platform plugin. These are loaded at runtime and must carry our
+#    Developer ID + hardened runtime or the notarized app fails to load them.
+PLUGINS_DIR="$APP/Contents/PlugIns"
+if [[ -d "$PLUGINS_DIR" ]]; then
+    while IFS= read -r -d '' plugin; do
+        if is_macho "$plugin"; then
+            echo "codesign-app: signing plugin $plugin"
+            sign_one "$plugin"
+        fi
+    done < <(find "$PLUGINS_DIR" -type f -print0)
+fi
+
+# 4. Main executable.
 MAIN_EXE="$APP/Contents/MacOS/trowel"
 if [[ -f "$MAIN_EXE" ]]; then
     echo "codesign-app: signing main executable $MAIN_EXE"
     sign_one "$MAIN_EXE"
 fi
 
-# 4. Bundle.
+# 5. Bundle.
 echo "codesign-app: signing bundle $APP"
 sign_one "$APP"
 
-# 5. Verify.
+# 6. Verify.
 echo "codesign-app: verifying signature"
 codesign --verify --deep --strict --verbose=2 "$APP"
 
