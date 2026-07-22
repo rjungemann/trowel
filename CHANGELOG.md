@@ -6,10 +6,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 <!-- New releases are inserted immediately below this comment. -->
 
-## [Unreleased]
+## [0.0.6] -- 2026-07-21
 
 ### Added
 - **Rainbow brackets** -- matching parentheses, square brackets, and curly braces are colored by nesting depth (cycling through seven colors), so it's easy to see which delimiters pair up. Unmatched closing brackets are flagged in red. Toggle it from **Trowel Settings** (on by default).
+
+### Changed
+- **Bundled Turmeric v0.30.3** -- updated the embedded `tur` compiler/REPL from v0.30.2 to v0.30.3.
+
+### Fixed
+- **REPL stdlib mismatch** -- the REPL now pins `TUR_STDLIB_DIR` to the stdlib shipped alongside the launched `tur` binary, so a stale ambient environment (e.g. a mise export) can no longer point the bundled REPL at a mismatched stdlib version.
 
 ## [0.0.5] -- 2026-07-21
 
