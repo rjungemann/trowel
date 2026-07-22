@@ -5,7 +5,7 @@ programming language, for macOS and Linux.
 
 <img src="docs/images/screenshot.png" alt="Trowel editing a Turmeric source file" width="400">
 
-**Latest release:** `v0.0.6` — adds depth-colored rainbow brackets, bundles Turmeric v0.30.3, and fixes a REPL stdlib version mismatch.
+**Latest release:** `v0.0.7` — bundles Turmeric v0.30.4.
 
 ## Install
 

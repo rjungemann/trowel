@@ -6,6 +6,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 <!-- New releases are inserted immediately below this comment. -->
 
+## [0.0.7] -- 2026-07-22
+
+### Changed
+- **Bundled Turmeric v0.30.4** -- updated the embedded `tur` compiler/REPL from v0.30.3 to v0.30.4.
+
 ## [0.0.6] -- 2026-07-21
 
 ### Added
