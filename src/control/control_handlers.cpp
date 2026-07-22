@@ -309,6 +309,11 @@ void HandleEditorSetSelection(MainWindow* w, const QJsonObject& args, const Repl
 
 void HandleEditorGetStyleAt(MainWindow* w, const QJsonObject& args, const Reply& reply) {
     const int pos = args.value("pos").toInt();
+    // Styling is otherwise lazy (driven by painting), so force the lexer to run
+    // through the requested position before reading the stored style byte.
+    if (ScintillaEdit* sci = w->editorView()->sciWidget()) {
+        sci->colourise(0, pos + 1);
+    }
     QJsonObject o;
     o["style"] = w->editorView()->styleAt(pos);
     reply(o, nullptr);

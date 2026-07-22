@@ -6,6 +6,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 <!-- New releases are inserted immediately below this comment. -->
 
+## [Unreleased]
+
+### Added
+- **Rainbow brackets** -- matching parentheses, square brackets, and curly braces are colored by nesting depth (cycling through seven colors), so it's easy to see which delimiters pair up. Unmatched closing brackets are flagged in red. Toggle it from **Trowel Settings** (on by default).
+
 ## [0.0.5] -- 2026-07-21
 
 ### Added

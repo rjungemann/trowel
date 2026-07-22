@@ -9,6 +9,7 @@
 #include <QFileInfo>
 #include <QFont>
 #include <QFontInfo>
+#include <QSettings>
 #include <QTextStream>
 #include <QVBoxLayout>
 
@@ -30,7 +31,8 @@ EditorView::EditorView(QWidget* parent)
 
     applyDefaultStyling();
 
-    sci_->setILexer(reinterpret_cast<sptr_t>(CreateTurmericLexer(false)));
+    rainbow_ = rainbowBracketsDefault();
+    sci_->setILexer(reinterpret_cast<sptr_t>(CreateTurmericLexer(false, rainbow_)));
     ApplyThemeToEditor(sci_, LoadBuiltinDarkTheme());
 
     connect(sci_, &ScintillaEditBase::savePointChanged, this, [this](bool dirty) {
@@ -84,6 +86,27 @@ void EditorView::setFont(const QFont& font) {
         sci_->styleSetFont(s, family.constData());
         sci_->styleSetSize(s, size);
     }
+    // Rainbow bracket styles live above the predefined range, so update them
+    // explicitly too.
+    for (int s = static_cast<int>(TurStyle::Rainbow0); s <= kHighestStyle; ++s) {
+        sci_->styleSetFont(s, family.constData());
+        sci_->styleSetSize(s, size);
+    }
+}
+
+bool EditorView::rainbowBracketsDefault() {
+    return QSettings().value("editor/rainbowBrackets", true).toBool();
+}
+
+void EditorView::setRainbowBrackets(bool enabled) {
+    if (rainbow_ == enabled) return;
+    rainbow_ = enabled;
+    // Swap in a fresh lexer configured for the new mode; Scintilla takes
+    // ownership and releases the old one.
+    sci_->setILexer(reinterpret_cast<sptr_t>(CreateTurmericLexer(false, rainbow_)));
+    // Re-lex the whole document so existing text picks up the new bracket
+    // styling immediately.
+    sci_->colourise(0, -1);
 }
 
 bool EditorView::loadFile(const QString& path) {

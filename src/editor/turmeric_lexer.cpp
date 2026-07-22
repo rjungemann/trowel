@@ -98,10 +98,22 @@ constexpr int kInCBlockBit = 0x200;
 constexpr int kInDatumCommentBit = 0x400;
 constexpr int kDcDepthShift = 16;
 constexpr int kDcDepthMask = 0xFF << kDcDepthShift;
+// Bracket nesting depth carried across lines so rainbow coloring stays
+// coherent for multi-line s-expressions. Stored in bits 24-30 (bit 31 is left
+// clear to avoid touching the sign bit of the int line state).
+constexpr int kBracketDepthShift = 24;
+constexpr int kBracketDepthMask = 0x7F << kBracketDepthShift;
+
+// Map a nesting depth to its rainbow style, cycling through the palette.
+constexpr TurStyle RainbowStyleForDepth(int depth) {
+    const int level = depth % kRainbowLevels;
+    return static_cast<TurStyle>(static_cast<int>(TurStyle::Rainbow0) + level);
+}
 
 class TurmericLexer final : public ILexer5 {
 public:
-    explicit TurmericLexer(bool sweet) : sweet_(sweet) {}
+    explicit TurmericLexer(bool sweet, bool rainbow)
+        : sweet_(sweet), rainbow_(rainbow) {}
 
     int SCI_METHOD Version() const override { return Scintilla::lvRelease5; }
     void SCI_METHOD Release() override { delete this; }
@@ -131,7 +143,7 @@ public:
     const char* SCI_METHOD GetSubStyleBases() override { return ""; }
 
     int SCI_METHOD NamedStyles() override {
-        return static_cast<int>(TurStyle::Count);
+        return kHighestStyle + 1;
     }
     const char* SCI_METHOD NameOfStyle(int) override { return ""; }
     const char* SCI_METHOD TagsOfStyle(int) override { return ""; }
@@ -152,6 +164,7 @@ private:
     TurStyle SymbolStyle(std::string_view sym) const;
 
     bool sweet_;
+    bool rainbow_;
 };
 
 TurStyle TurmericLexer::SymbolStyle(std::string_view sym) const {
@@ -189,6 +202,7 @@ void TurmericLexer::Lex(Sci_PositionU startPos, Sci_Position lengthDoc,
     bool inCBlock = (lineState & kInCBlockBit) != 0;
     bool inDatumComment = (lineState & kInDatumCommentBit) != 0;
     int dcDepth = (lineState & kDcDepthMask) >> kDcDepthShift;
+    int bracketDepth = (lineState & kBracketDepthMask) >> kBracketDepthShift;
 
     Sci_Position i = 0;
     Sci_Position curLine = startLine;
@@ -215,7 +229,8 @@ void TurmericLexer::Lex(Sci_PositionU startPos, Sci_Position lengthDoc,
                     | (inString ? kInStringBit : 0)
                     | (inCBlock ? kInCBlockBit : 0)
                     | (inDatumComment ? kInDatumCommentBit : 0)
-                    | ((dcDepth << kDcDepthShift) & kDcDepthMask));
+                    | ((dcDepth << kDcDepthShift) & kDcDepthMask)
+                    | ((bracketDepth << kBracketDepthShift) & kBracketDepthMask));
                 ++curLine;
             }
         }
@@ -502,12 +517,29 @@ void TurmericLexer::Lex(Sci_PositionU startPos, Sci_Position lengthDoc,
             emit(i, 1, TurStyle::Quote); ++i; continue;
         }
 
-        // Delimiters
-        if (c == '(' || c == ')' || c == '[' || c == ']') {
-            emit(i, 1, TurStyle::Delim); ++i; continue;
+        // Delimiters. With rainbow coloring on, every bracket type is painted
+        // by its nesting depth so matching pairs share a color; an unmatched
+        // closer is flagged. Without it, brackets fall back to the flat
+        // Delim / CurlyInfix styles.
+        if (c == '(' || c == '[' || c == '{') {
+            const TurStyle flat = (c == '{') ? TurStyle::CurlyInfix : TurStyle::Delim;
+            emit(i, 1, rainbow_ ? RainbowStyleForDepth(bracketDepth) : flat);
+            ++bracketDepth;
+            ++i; continue;
         }
-        if (c == '{' || c == '}') {
-            emit(i, 1, TurStyle::CurlyInfix); ++i; continue;
+        if (c == ')' || c == ']' || c == '}') {
+            const TurStyle flat = (c == '}') ? TurStyle::CurlyInfix : TurStyle::Delim;
+            TurStyle s = flat;
+            if (rainbow_) {
+                if (bracketDepth > 0) {
+                    --bracketDepth;
+                    s = RainbowStyleForDepth(bracketDepth);
+                } else {
+                    s = TurStyle::BracketError;
+                }
+            }
+            emit(i, 1, s);
+            ++i; continue;
         }
 
         // Numbers
@@ -563,13 +595,14 @@ void TurmericLexer::Lex(Sci_PositionU startPos, Sci_Position lengthDoc,
         | (inString ? kInStringBit : 0)
         | (inCBlock ? kInCBlockBit : 0)
         | (inDatumComment ? kInDatumCommentBit : 0)
-        | ((dcDepth << kDcDepthShift) & kDcDepthMask));
+        | ((dcDepth << kDcDepthShift) & kDcDepthMask)
+        | ((bracketDepth << kBracketDepthShift) & kBracketDepthMask));
 }
 
 } // namespace
 
-ILexer5* CreateTurmericLexer(bool sweetExp) {
-    return new TurmericLexer(sweetExp);
+ILexer5* CreateTurmericLexer(bool sweetExp, bool rainbow) {
+    return new TurmericLexer(sweetExp, rainbow);
 }
 
 }

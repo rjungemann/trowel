@@ -847,6 +847,8 @@ void MainWindow::openPreferences() {
     }
 
     auto* prefs = new PreferencesView(editorStack_);
+    connect(prefs, &PreferencesView::rainbowBracketsChanged,
+            this, &MainWindow::applyRainbowBrackets);
 
     // Reuse a fresh, empty, unmodified Untitled editor if available.
     if (activeIndex_ >= 0 && activeIndex_ < static_cast<int>(buffers_.size())) {
@@ -878,6 +880,14 @@ void MainWindow::openPreferences() {
     connectBufferSignals(newIndex);
     activateBuffer(newIndex);
     refreshTabBar();
+}
+
+void MainWindow::applyRainbowBrackets(bool enabled) {
+    for (auto& b : buffers_) {
+        if (b->view && b->view->kind() == TabContent::Kind::Editor) {
+            static_cast<EditorView*>(b->view)->setRainbowBrackets(enabled);
+        }
+    }
 }
 
 QString MainWindow::replWorkingDir() const {

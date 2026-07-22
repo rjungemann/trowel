@@ -1,7 +1,9 @@
 #include "app/preferences_view.h"
 
+#include "editor/editor_view.h"
 #include "editor/theme_loader.h"
 
+#include <QCheckBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -39,6 +41,14 @@ PreferencesView::PreferencesView(QWidget* parent)
             this, &PreferencesView::commitTurmericPath);
     root->addWidget(turPathEdit_);
 
+    rainbowCheck_ = new QCheckBox(QStringLiteral("Rainbow brackets"), this);
+    rainbowCheck_->setToolTip(QStringLiteral(
+        "Color matching parentheses, brackets, and braces by nesting depth."));
+    rainbowCheck_->setChecked(EditorView::rainbowBracketsDefault());
+    connect(rainbowCheck_, &QCheckBox::toggled,
+            this, &PreferencesView::commitRainbowBrackets);
+    root->addWidget(rainbowCheck_);
+
     root->addStretch(1);
 
     auto* buttonRow = new QHBoxLayout();
@@ -72,9 +82,16 @@ void PreferencesView::commitTurmericPath() {
     }
 }
 
+void PreferencesView::commitRainbowBrackets(bool enabled) {
+    QSettings().setValue("editor/rainbowBrackets", enabled);
+    emit rainbowBracketsChanged(enabled);
+}
+
 void PreferencesView::restoreDefaults() {
     QSettings().remove("repl/turBinary");
     if (turPathEdit_) turPathEdit_->clear();
+    QSettings().remove("editor/rainbowBrackets");
+    if (rainbowCheck_) rainbowCheck_->setChecked(true);
 }
 
 }

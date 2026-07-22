@@ -32,6 +32,13 @@ public:
     void setFont(const QFont& font);
     QFont currentFont() const { return currentFont_; }
 
+    // Toggle rainbow (depth-colored) brackets and re-lex the whole document.
+    void setRainbowBrackets(bool enabled);
+    bool rainbowBrackets() const { return rainbow_; }
+
+    // Default rainbow-bracket preference, read from QSettings.
+    static bool rainbowBracketsDefault();
+
     // Control API surface.
     ScintillaEdit* sciWidget() const { return sci_; }
     void setText(const QByteArray& text);
@@ -51,6 +58,7 @@ private:
     ScintillaEdit* sci_;
     QString path_;
     QFont currentFont_;
+    bool rainbow_ = true;
 };
 
 }
