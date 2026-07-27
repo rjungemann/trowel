@@ -109,6 +109,37 @@ def test_second_launch_forwards_file_and_exits(primary, tmp_path):
     with TrowelCtl(sock) as ctl:
         geom = ctl.call("window.geometry")
         assert geom["file_path"] == str(target)
+        # Requirement (b) over the forwarding path: the file lands as a tab in
+        # the window that was already open, not in a second window.
+        assert ctl.call("window.list")["count"] == 1
+
+
+def test_forwarded_files_become_tabs_in_the_existing_window(primary, tmp_path):
+    proc, runtime_dir, home, sock = primary
+
+    first = tmp_path / "one.tur"
+    first.write_text("(def one 1)\n")
+    second = tmp_path / "two.tur"
+    second.write_text("(def two 2)\n")
+
+    for target in (first, second):
+        result = subprocess.run(
+            [str(BIN), str(target)], env=_env(runtime_dir, home), timeout=10
+        )
+        assert result.returncode == 0
+
+    with TrowelCtl(sock) as ctl:
+        lst = ctl.call("window.list")
+        assert lst["count"] == 1, "forwarding must not spawn windows"
+        tabs = lst["windows"][0]["tabs"]
+        assert str(first) in tabs and str(second) in tabs
+
+        # Forwarding the same file again focuses its tab rather than adding one.
+        before = ctl.call("window.list")["windows"][0]["tab_count"]
+        subprocess.run([str(BIN), str(first)], env=_env(runtime_dir, home), timeout=10)
+        after = ctl.call("window.list")
+        assert after["windows"][0]["tab_count"] == before
+        assert after["windows"][0]["file_path"] == str(first)
 
 
 def test_bare_second_launch_activates_and_exits(primary):

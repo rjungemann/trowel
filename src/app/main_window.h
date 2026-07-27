@@ -3,11 +3,14 @@
 #include <QFont>
 #include <QMainWindow>
 #include <QStringList>
+#include <QVariantMap>
 
 #include <memory>
 #include <vector>
 
 class QAction;
+class QDragEnterEvent;
+class QDropEvent;
 class QMenu;
 class QSplitter;
 class QStackedWidget;
@@ -21,6 +24,7 @@ class ReplSession;
 class TabBar;
 class TabContent;
 class TerminalView;
+class WindowManager;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -40,19 +44,44 @@ public:
     //
     // Every window must get a startSession(); WindowManager::newWindow() does
     // it for you.
-    void restoreSession();
     void startSession();
 
+    // This window's slice of the persisted session: geometry, splitter, REPL
+    // visibility, open buffers and which was active. Written and read by
+    // WindowManager, which owns the array of them.
+    QVariantMap sessionState() const;
+    void applySessionState(const QVariantMap& state);
+
+    // Handle a set of dropped paths. The first replaces the current tab (or
+    // simply opens, when there is no tab to replace or the file is already
+    // open here); any others open as additional tabs. Returns false if the
+    // user cancelled an unsaved-changes prompt.
+    bool openDropped(const QStringList& paths);
+
     EditorView* editorView() const;
+    // One entry per open tab, in tab order; empty string for an Untitled or
+    // otherwise pathless buffer. Exposed for the control socket so callers can
+    // see the tab set, not just the active buffer.
+    QStringList tabPaths() const;
     TerminalView* terminalView() const { return terminal_; }
     ReplSession* replSession() const { return repl_; }
     QSplitter* splitter() const { return splitter_; }
 
+    // The registry this window belongs to, set by WindowManager::createWindow().
+    // Windows need it to spawn siblings (File ▸ New Window); it is null only for
+    // a window built outside the registry.
+    void setWindowManager(WindowManager* windows);
+    WindowManager* windowManager() const { return windows_; }
+
 protected:
     void closeEvent(QCloseEvent* event) override;
+    void dragEnterEvent(QDragEnterEvent* event) override;
+    void dropEvent(QDropEvent* event) override;
 
 private slots:
     void newFile();
+    void newWindow();
+    void quitApp();
     void openFile();
     void openDirectoryDialog();
     bool save();
@@ -74,6 +103,7 @@ private slots:
     void closeCurrentTab();
     void openPreferences();
     void applyRainbowBrackets(bool enabled);
+    void rebuildWindowMenu();
 
 private:
     struct Buffer {
@@ -88,7 +118,9 @@ private:
     void updateWindowTitle();
     bool maybeSaveBuffer(int index);
     bool maybeSaveAll();
-    void persistState();
+    // App-wide settings (recent files, editor font) as opposed to the
+    // per-window state in sessionState().
+    void persistGlobals();
     QString replWorkingDir() const;
     void openSettingsDirectory(const QString& relPath);
 
@@ -97,7 +129,14 @@ private:
     void rememberRecentFile(const QString& path);
 
     int indexOfView(TabContent* v) const;
+    // Index of the editor tab already showing `absPath`, or -1.
+    int indexOfPath(const QString& absPath) const;
+    // Open a path as a file or a directory, whichever it is.
+    bool openAny(const QString& path);
+    // Replace tab `index` with `path`, swapping the view kind if needed.
+    bool replaceBufferWithPath(int index, const QString& path);
     bool replaceBufferWithFile(int index, const QString& path);
+    bool replaceBufferWithDirectory(int index, const QString& path);
     void updateEditorActionsEnabled();
     int nextUntitledIndex() const;
     void refreshTabBar();
@@ -111,6 +150,7 @@ private:
     bool saveBufferAs(int index);
     void connectBufferSignals(int index);
 
+    WindowManager* windows_ = nullptr;
     int activeIndex_ = -1;
     std::vector<std::unique_ptr<Buffer>> buffers_;
 
@@ -120,6 +160,7 @@ private:
     ReplSession* repl_ = nullptr;
     QSplitter* splitter_ = nullptr;
     QMenu* recentMenu_ = nullptr;
+    QMenu* windowMenu_ = nullptr;
     QToolBar* toolBar_ = nullptr;
     QAction* runBufferAction_ = nullptr;
     QAction* runSelectionAction_ = nullptr;

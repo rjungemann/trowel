@@ -90,7 +90,7 @@ def _wait_for_socket(path: str, timeout: float = 5.0) -> None:
     raise TimeoutError(f"control socket never appeared at {path}")
 
 
-def _launch_trowel(tmp_path: Path) -> TrowelProc:
+def _launch_trowel(tmp_path: Path, args: list[str] | None = None) -> TrowelProc:
     if not BIN.exists():
         pytest.skip(f"trowel binary not built at {BIN}")
 
@@ -113,8 +113,8 @@ def _launch_trowel(tmp_path: Path) -> TrowelProc:
     env.setdefault("LC_ALL", "en_US.UTF-8")
 
     proc = subprocess.Popen(
-        [str(BIN), f"--control-socket-path={sock}"],
-        stdout=stdout_path.open("wb"),
+        [str(BIN), f"--control-socket-path={sock}", *(args or [])],
+        stdout=stdout_path.open("ab"),
         stderr=subprocess.STDOUT,
         env=env,
     )
@@ -191,6 +191,69 @@ def fresh_trowel(tmp_path: Path, request) -> Iterator[Client]:
 @pytest.fixture(scope="function")
 def trowel(fresh_trowel: Client) -> Client:
     return fresh_trowel
+
+
+class Session:
+    """Launch Trowel repeatedly against one persistent HOME + settings dir.
+
+    Session restore only means anything across a quit and a relaunch, which
+    the single-shot `trowel` fixture cannot express.
+    """
+
+    def __init__(self, tmp_path: Path) -> None:
+        self._tmp_path = tmp_path
+        self._live: list[tuple[TrowelProc, TrowelCtl]] = []
+
+    @property
+    def settings_ini(self) -> Path:
+        """Where TROWEL_SETTINGS_DIR puts the INI (see _launch_trowel)."""
+        return self._tmp_path / "home" / "settings" / "turmeric" / "Trowel.ini"
+
+    def launch(self, args: list[str] | None = None) -> Client:
+        tp = _launch_trowel(self._tmp_path, args)
+        ctl = TrowelCtl(tp.socket_path)
+        client = Client(ctl, "session")
+        self._live.append((tp, ctl))
+        return client
+
+    def quit(self, client: Client) -> None:
+        """Quit through the File menu and wait for the process to exit.
+
+        Persistence runs in closeEvent, so a test that kills the process
+        instead would never see a session written.
+        """
+        tp, ctl = self._live[-1]
+        try:
+            client.call("menu.invoke", {"path": ["File", "Quit"]})
+        except Exception:
+            pass
+        try:
+            tp.proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            tp.stop()
+            raise AssertionError("Trowel did not exit on File > Quit")
+        try:
+            ctl.close()
+        except Exception:
+            pass
+        self._live.pop()
+
+    def cleanup(self) -> None:
+        for tp, ctl in self._live:
+            try:
+                ctl.close()
+            except Exception:
+                pass
+            tp.stop()
+
+
+@pytest.fixture
+def trowel_session(tmp_path: Path) -> Iterator[Session]:
+    session = Session(tmp_path)
+    try:
+        yield session
+    finally:
+        session.cleanup()
 
 
 @pytest.fixture

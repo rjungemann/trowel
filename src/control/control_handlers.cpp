@@ -2,6 +2,7 @@
 
 #include "control/control_connection.h"
 #include "app/main_window.h"
+#include "app/window_manager.h"
 #include "editor/editor_view.h"
 #include "repl/repl_session.h"
 #include "repl/pty_session.h"
@@ -12,7 +13,11 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QDragEnterEvent>
+#include <QDropEvent>
 #include <QHash>
+#include <QMimeData>
+#include <QUrl>
 #include <QJsonArray>
 #include <QKeyEvent>
 #include <QMenu>
@@ -36,6 +41,17 @@ inline QJsonObject Ok() { QJsonObject o; o["ok"] = true; return o; }
 inline void ReplyErr(const Reply& reply, const QString& code, const QString& msg) {
     ControlError e{code, msg};
     reply({}, &e);
+}
+
+// Resolve the active editor, or reply with an error and return null.
+//
+// MainWindow::editorView() is null whenever the active tab is not an editor —
+// a directory browser or the preferences pane. Editor commands must check;
+// dereferencing it crashes the app.
+EditorView* RequireEditor(MainWindow* w, const Reply& reply) {
+    EditorView* e = w->editorView();
+    if (!e) ReplyErr(reply, "no_editor", "the active tab is not an editor");
+    return e;
 }
 
 Qt::KeyboardModifiers ParseMods(const QJsonArray& mods) {
@@ -146,7 +162,13 @@ void ArmTimeout(std::shared_ptr<WaitCtx> ctx, QObject* parent, int ms, Reply rep
 
 void HandleWindowFocus(MainWindow* w, const QJsonObject& args, const Reply& reply) {
     const QString pane = args.value("pane").toString();
-    if (pane == "editor") { w->editorView()->setFocus(); reply(Ok(), nullptr); return; }
+    if (pane == "editor") {
+        EditorView* e = RequireEditor(w, reply);
+        if (!e) return;
+        e->setFocus();
+        reply(Ok(), nullptr);
+        return;
+    }
     if (pane == "terminal" || pane == "repl") { w->terminalView()->setFocus(); reply(Ok(), nullptr); return; }
     ReplyErr(reply, "bad_pane", QString("unknown pane: %1").arg(pane));
 }
@@ -160,6 +182,57 @@ void HandleWindowActivate(MainWindow* w, const QJsonObject&, const Reply& reply)
     reply(Ok(), nullptr);
 }
 
+void HandleWindowNew(WindowManager* wm, const QJsonObject&, const Reply& reply) {
+    wm->newWindow();
+    QJsonObject o;
+    o["count"] = wm->count();
+    reply(o, nullptr);
+}
+
+void HandleWindowList(WindowManager* wm, const QJsonObject&, const Reply& reply) {
+    QJsonArray arr;
+    for (MainWindow* win : wm->windows()) {
+        QJsonObject o;
+        o["title"] = win->windowTitle();
+        o["active"] = (win == wm->activeWindow());
+        EditorView* e = win->editorView();
+        o["file_path"] = e ? e->filePath() : QString();
+        QJsonArray tabs;
+        for (const QString& p : win->tabPaths()) tabs.append(p);
+        o["tabs"] = tabs;
+        o["tab_count"] = tabs.size();
+        arr.append(o);
+    }
+    QJsonObject o;
+    o["count"] = arr.size();
+    o["windows"] = arr;
+    reply(o, nullptr);
+}
+
+void HandleWindowDrop(MainWindow* w, const QJsonObject& args, const Reply& reply) {
+    QList<QUrl> urls;
+    for (const QJsonValue& v : args.value("paths").toArray()) {
+        const QString p = v.toString();
+        if (!p.isEmpty()) urls << QUrl::fromLocalFile(p);
+    }
+    if (urls.isEmpty()) { ReplyErr(reply, "bad_args", "missing `paths`"); return; }
+
+    // Synthesize a real drag/drop rather than calling openDropped() directly,
+    // so the window's dragEnterEvent/dropEvent are on the tested path too.
+    QMimeData mime;
+    mime.setUrls(urls);
+    const QPoint pos(10, 10);
+    QDragEnterEvent enter(pos, Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(w, &enter);
+    if (!enter.isAccepted()) { ReplyErr(reply, "drop_rejected", "window refused the drag"); return; }
+    QDropEvent drop(QPointF(pos), Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(w, &drop);
+
+    QJsonObject o;
+    o["accepted"] = drop.isAccepted();
+    reply(o, nullptr);
+}
+
 void HandleWindowGeometry(MainWindow* w, const QJsonObject&, const Reply& reply) {
     QJsonObject o;
     const QRect g = w->geometry();
@@ -168,7 +241,10 @@ void HandleWindowGeometry(MainWindow* w, const QJsonObject&, const Reply& reply)
     QJsonArray a; for (int s : sizes) a.append(s);
     o["splitter"] = a;
     o["title"] = w->windowTitle();
-    o["file_path"] = w->editorView()->filePath();
+    // Not an error when the active tab is a directory/preferences pane —
+    // geometry is still meaningful, so report an empty path.
+    EditorView* ge = w->editorView();
+    o["file_path"] = ge ? ge->filePath() : QString();
     reply(o, nullptr);
 }
 
@@ -209,7 +285,8 @@ void HandleEditorOpen(MainWindow* w, const QJsonObject& args, const Reply& reply
 }
 
 void HandleEditorSave(MainWindow* w, const QJsonObject& args, const Reply& reply) {
-    EditorView* e = w->editorView();
+    EditorView* e = RequireEditor(w, reply);
+    if (!e) return;
     const QString path = args.value("path").toString();
     const bool ok = path.isEmpty() ? e->saveCurrent() : e->saveFile(path);
     if (!ok) { ReplyErr(reply, "save_failed", "save failed"); return; }
@@ -217,13 +294,17 @@ void HandleEditorSave(MainWindow* w, const QJsonObject& args, const Reply& reply
 }
 
 void HandleEditorSetText(MainWindow* w, const QJsonObject& args, const Reply& reply) {
-    w->editorView()->setText(args.value("text").toString().toUtf8());
+    EditorView* e = RequireEditor(w, reply);
+    if (!e) return;
+    e->setText(args.value("text").toString().toUtf8());
     reply(Ok(), nullptr);
 }
 
 void HandleEditorType(MainWindow* w, const QJsonObject& args, const Reply& reply) {
     const QString text = args.value("text").toString();
-    QWidget* target = w->editorView()->sciWidget();
+    EditorView* e = RequireEditor(w, reply);
+    if (!e) return;
+    QWidget* target = e->sciWidget();
     if (!target) { ReplyErr(reply, "no_target", "editor unavailable"); return; }
     for (QChar c : text) {
         int key;
@@ -243,12 +324,15 @@ void HandleEditorPress(MainWindow* w, const QJsonObject& args, const Reply& repl
     const Qt::KeyboardModifiers mods = ParseMods(args.value("mods").toArray());
     // Modified keys typically don't produce text.
     if (mods && mods != Qt::ShiftModifier) text.clear();
-    SendKeyToWidget(w->editorView()->sciWidget(), key, mods, text);
+    EditorView* pe = RequireEditor(w, reply);
+    if (!pe) return;
+    SendKeyToWidget(pe->sciWidget(), key, mods, text);
     reply(Ok(), nullptr);
 }
 
 void HandleEditorGetText(MainWindow* w, const QJsonObject&, const Reply& reply) {
-    EditorView* e = w->editorView();
+    EditorView* e = RequireEditor(w, reply);
+    if (!e) return;
     const QByteArray raw = e->text();
     QJsonObject o;
     if (raw.size() > 4 * 1024 * 1024) {
@@ -263,7 +347,8 @@ void HandleEditorGetText(MainWindow* w, const QJsonObject&, const Reply& reply) 
 }
 
 void HandleEditorGetCursor(MainWindow* w, const QJsonObject&, const Reply& reply) {
-    EditorView* e = w->editorView();
+    EditorView* e = RequireEditor(w, reply);
+    if (!e) return;
     const int pos = e->cursorPos();
     const auto [line, col] = e->lineColFromPos(pos);
     QJsonObject o;
@@ -278,7 +363,8 @@ void HandleEditorGetCursor(MainWindow* w, const QJsonObject&, const Reply& reply
 }
 
 void HandleEditorSetCursor(MainWindow* w, const QJsonObject& args, const Reply& reply) {
-    EditorView* e = w->editorView();
+    EditorView* e = RequireEditor(w, reply);
+    if (!e) return;
     int pos = -1;
     if (args.contains("pos")) pos = args.value("pos").toInt();
     else if (args.contains("line")) {
@@ -292,7 +378,8 @@ void HandleEditorSetCursor(MainWindow* w, const QJsonObject& args, const Reply& 
 }
 
 void HandleEditorGetSelection(MainWindow* w, const QJsonObject&, const Reply& reply) {
-    EditorView* e = w->editorView();
+    EditorView* e = RequireEditor(w, reply);
+    if (!e) return;
     const auto [s, en] = e->selectionRange();
     QJsonObject o;
     o["start"] = s; o["end"] = en;
@@ -303,7 +390,9 @@ void HandleEditorGetSelection(MainWindow* w, const QJsonObject&, const Reply& re
 void HandleEditorSetSelection(MainWindow* w, const QJsonObject& args, const Reply& reply) {
     const int start = args.value("start").toInt();
     const int end = args.value("end").toInt();
-    w->editorView()->setSelection(start, end);
+    EditorView* e = RequireEditor(w, reply);
+    if (!e) return;
+    e->setSelection(start, end);
     reply(Ok(), nullptr);
 }
 
@@ -311,11 +400,13 @@ void HandleEditorGetStyleAt(MainWindow* w, const QJsonObject& args, const Reply&
     const int pos = args.value("pos").toInt();
     // Styling is otherwise lazy (driven by painting), so force the lexer to run
     // through the requested position before reading the stored style byte.
-    if (ScintillaEdit* sci = w->editorView()->sciWidget()) {
+    EditorView* e = RequireEditor(w, reply);
+    if (!e) return;
+    if (ScintillaEdit* sci = e->sciWidget()) {
         sci->colourise(0, pos + 1);
     }
     QJsonObject o;
-    o["style"] = w->editorView()->styleAt(pos);
+    o["style"] = e->styleAt(pos);
     reply(o, nullptr);
 }
 
@@ -484,10 +575,14 @@ void HandleWaitEditorSignal(MainWindow* w, QPointer<ControlConnection> conn,
                             const QJsonObject& args, const Reply& reply) {
     const QString sig = args.value("signal").toString();
     const int timeout = args.value("timeout_ms").toInt(3000);
+    // Connecting to a null sender would not crash, but the wait could never
+    // fire — it would fail as a timeout, hiding the real reason.
+    EditorView* ed = RequireEditor(w, reply);
+    if (!ed) return;
     auto ctx = std::make_shared<WaitCtx>();
 
     if (sig == "modifiedChanged") {
-        ctx->conn = QObject::connect(w->editorView(), &EditorView::modifiedChanged, w,
+        ctx->conn = QObject::connect(ed, &EditorView::modifiedChanged, w,
             [ctx, reply](bool modified) {
                 if (ctx->done) return;
                 ctx->done = true;
@@ -497,7 +592,7 @@ void HandleWaitEditorSignal(MainWindow* w, QPointer<ControlConnection> conn,
                 reply(o, nullptr);
             });
     } else if (sig == "filePathChanged") {
-        ctx->conn = QObject::connect(w->editorView(), &EditorView::filePathChanged, w,
+        ctx->conn = QObject::connect(ed, &EditorView::filePathChanged, w,
             [ctx, reply](const QString& path) {
                 if (ctx->done) return;
                 ctx->done = true;
@@ -535,13 +630,26 @@ void HandleWaitProcessExit(MainWindow* w, QPointer<ControlConnection> conn,
 
 }  // namespace
 
-void Dispatch(MainWindow* w, QPointer<ControlConnection> conn,
+void Dispatch(WindowManager* windows, QPointer<ControlConnection> conn,
               const QString& cmd, const QJsonObject& args, Reply reply) {
-    if (!w) { ReplyErr(reply, "no_window", "main window not available"); return; }
+    if (!windows) { ReplyErr(reply, "no_registry", "window registry not available"); return; }
 
+    // Registry-level commands: these must work with zero windows open, so they
+    // never resolve a target window (asking "how many windows?" must not create
+    // one to answer).
     if (cmd == "ping") { QJsonObject o; o["pong"] = true; reply(o, nullptr); return; }
+    if (cmd == "window.new")  { HandleWindowNew(windows, args, reply); return; }
+    if (cmd == "window.list") { HandleWindowList(windows, args, reply); return; }
+
+    // Opening a document creates a window when none is open — requirement (a).
+    // Every other command operates on the window that already has focus, and
+    // reports `no_window` rather than conjuring a blank one to answer a query.
+    const bool createsWindow = (cmd == "editor.open" || cmd == "window.activate");
+    MainWindow* w = createsWindow ? windows->activeOrNewWindow() : windows->activeWindow();
+    if (!w) { ReplyErr(reply, "no_window", "no editor window is open"); return; }
 
     if (cmd == "window.activate")      { HandleWindowActivate(w, args, reply); return; }
+    if (cmd == "window.drop")          { HandleWindowDrop(w, args, reply); return; }
     if (cmd == "window.focus")         { HandleWindowFocus(w, args, reply); return; }
     if (cmd == "window.geometry")      { HandleWindowGeometry(w, args, reply); return; }
     if (cmd == "window.set_splitter")  { HandleWindowSetSplitter(w, args, reply); return; }

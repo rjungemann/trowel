@@ -9,12 +9,20 @@ On macOS, `Ctrl` maps to `Cmd` for the platform-standard sequences
 | Shortcut | Action |
 | --- | --- |
 | `Ctrl+N` | New buffer |
+| `Ctrl+Shift+N` | New window |
 | `Ctrl+O` | Open file… |
 | `Ctrl+Shift+O` | Open directory… |
 | `Ctrl+S` | Save |
 | `Ctrl+Shift+S` | Save As… |
-| `Ctrl+W` | Close current tab |
-| `Ctrl+Q` / `Alt+F4` | Quit |
+| `Ctrl+W` | Close current tab (the last tab leaves an empty one) |
+| `Ctrl+Shift+W` | Close window |
+| `Ctrl+Q` / `Alt+F4` | Quit (all windows) |
+
+## Window
+
+The **Window** menu lists every open window; selecting one brings it to the
+front. See [Windows, tabs & the REPL](windows-tabs-and-repl.md) for how
+Trowel decides where a file opens.
 
 ## View
 

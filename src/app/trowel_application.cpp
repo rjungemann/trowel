@@ -18,6 +18,16 @@ void TrowelApplication::setWindowManager(WindowManager* windows) {
 }
 
 bool TrowelApplication::event(QEvent* e) {
+    // Dock-icon click / app reactivation with no windows left. On macOS the app
+    // outlives its windows (setQuitOnLastWindowClosed(false)), so this is the
+    // path back to a usable editor. Guarded on closingDown() so a quit in
+    // progress can't resurrect a window it just closed.
+    if (e->type() == QEvent::ApplicationActivate) {
+        if (windows_ && windows_->count() == 0 && !closingDown()) {
+            windows_->newWindow();
+        }
+        return QApplication::event(e);
+    }
     if (e->type() == QEvent::FileOpen) {
         const QString path = static_cast<QFileOpenEvent*>(e)->file();
         if (!path.isEmpty()) {
