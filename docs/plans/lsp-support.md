@@ -241,31 +241,52 @@ non-ASCII source is mis-positioned until phase 2 item 2.
 
 ## Phase 2 — Turmeric server improvements (`../turmeric/doc-stuff`)
 
-Landed upstream, then consumed by Trowel via a version bump. Ordered by value:
+Landed upstream on the `lsp-phase2` branch of the turmeric repo, then consumed
+by Trowel via a version bump. Ordered by value.
 
-1. **Stop recompiling to `/tmp` on every keystroke** — `run_doc_analysis`
-   (`src/lsp/lsp.c:112-177`) writes a temp file and runs a full compile inline on
-   the single-threaded loop, so hover and completion queue behind it. At minimum
-   debounce server-side; better, support `$/cancelRequest`.
-2. **`general.positionEncoding` negotiation** (LSP 3.17) advertising `utf-8`, so
-   the byte columns both sides already use become protocol-correct rather than
-   accidentally-compatible. Then flip nothing in Trowel — it already matches.
+### Done
+
+1. **Stop recompiling to `/tmp` on every keystroke.** `run_doc_analysis` no
+   longer runs inline from didOpen/didChange. Documents are marked `dirty` and
+   analyzed either when the client has been quiet for 200ms (the main loop
+   `poll()`s stdin — safe only because `lsp_read_message` has no userspace
+   buffer) or immediately before any request that reads symbols. Measured: a
+   burst of 10 edits now produces **one** analysis, not ten, and a request
+   issued right after an edit still sees the new text.
+2. **`positionEncoding: "utf-8"`** is advertised (LSP 3.17), so the byte
+   offsets both sides already used are now the negotiated contract rather than
+   an accidental match. Trowel needed no change — `kPositionEncoding` was
+   already `Utf8`.
+5. **`\uXXXX` decoding**, including surrogate pairs, plus the previously
+   missing `\b` `\f` `\/`. Unpaired surrogates become U+FFFD so the output
+   stays valid UTF-8. Proven by differential test: for
+   `(def a "é") (def later 2)` the old binary reports `later` at
+   character 21, the fixed one at 18.
+7. **Doc refresh** — `lsp-guide.md` no longer claims completion is unsupported
+   or that the VS Code extension is syntax-only, and now documents the debounce
+   and the byte-offset encoding.
+
+Also fixed along the way: a request with missing `params` produced **no
+response at all**, hanging a conforming client. All requests now get an answer
+(`-32602`), via a new shared `send_error` helper that also replaced the
+open-coded method-not-found path.
+
+### Not started
+
 3. **`textDocument/signatureHelp`** — the calltip logic already exists, unwired,
    in `src/cli/lsp_lite.c` (`calltip` method).
 4. **`textDocument/formatting`** backed by `tur format`. Today VS Code shells out
    client-side (`vscode-syntax-ext/extension.js:11-34`) and Trowel blocks the UI
-   doing the same in `MainWindow::formatFile()` (`main_window.cpp:908`).
-5. **`\uXXXX` decoding** in `unescape_json` (`src/lsp/lsp.c:89`) — currently only
-   `\" \\ \n \r \t` are handled, a real correctness bug for non-ASCII source.
-6. **Incremental sync** (`textDocumentSync: 2`). `on_did_change`
-   (`src/lsp/lsp.c:231`) currently reads only `contentChanges[0].text` and would
-   silently mishandle ranges.
-7. **Doc refresh** — `docs/guides/lsp-guide.md` says completion is "Not yet
-   supported" (it is) and that the VS Code extension is syntax-only (it ships a
-   LanguageClient); `docs/archive/lsp-hover-definition-completion-plan.md`'s
-   status header is likewise stale.
+   doing the same in `MainWindow::formatFile()`.
+6. **Incremental sync** (`textDocumentSync: 2`). `on_did_change` reads only
+   `contentChanges[0].text` and would silently mishandle ranges. Lower value now
+   that full-sync analysis is debounced.
 
-Consuming it in Trowel means cutting a Turmeric release, then bumping
+Also still open, and the reason mid-typing completion is weak: completion is
+driven by the last **successful** compile, so an unbalanced paren — the normal
+state while typing — yields no symbols at all.
+
+Consuming any of this in Trowel means cutting a Turmeric release, then bumping
 `TROWEL_TURMERIC_VERSION` **and all three per-arch SHA-256s** in
 `CMakeLists.txt:109-125`.
 
