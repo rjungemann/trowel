@@ -2,6 +2,7 @@
 
 #include "editor/lexers.h"
 #include "editor/theme_loader.h"
+#include "lsp/lsp_manager.h"
 
 #include <ScintillaEdit.h>
 
@@ -38,6 +39,75 @@ EditorView::EditorView(QWidget* parent)
     connect(sci_, &ScintillaEditBase::savePointChanged, this, [this](bool dirty) {
         emit modifiedChanged(dirty);
     });
+
+    // Text edits bump the document version. Style and marker notifications also
+    // arrive on this signal, so filter to actual content changes — otherwise
+    // painting diagnostics would itself look like an edit and loop.
+    connect(sci_, &ScintillaEditBase::modified, this,
+            [this](Scintilla::ModificationFlags type, Scintilla::Position, Scintilla::Position,
+                   Scintilla::Position, const QByteArray&, Scintilla::Position,
+                   Scintilla::FoldLevel, Scintilla::FoldLevel) {
+        constexpr auto kContentChange =
+            Scintilla::ModificationFlags::InsertText | Scintilla::ModificationFlags::DeleteText;
+        if ((type & kContentChange) == Scintilla::ModificationFlags::None) return;
+        docVersion_++;
+        emit contentChanged(docVersion_);
+    });
+
+    // The server advertises `(` and space as triggers. We honor `(` only:
+    // space fires on nearly every keystroke in a lisp, and each request forces
+    // a didChange plus a full compile on the server's single thread. Explicit
+    // completion (Ctrl+Space) covers the rest.
+    connect(sci_, &ScintillaEditBase::charAdded, this, [this](int ch) {
+        if (ch == '(') emit completionRequested(cursorPos());
+    });
+
+    connect(sci_, &ScintillaEditBase::dwellStart, this, [this](int x, int y) {
+        const int pos = int(sci_->positionFromPoint(x, y));
+        if (pos >= 0) emit hoverRequested(pos);
+    });
+    connect(sci_, &ScintillaEditBase::dwellEnd, this, [this](int, int) {
+        sci_->callTipCancel();
+        emit hoverEnded();
+    });
+
+    attachLanguageServer();
+}
+
+// Talk to the language server from here rather than from MainWindow: the
+// wiring is per-buffer, not per-window, and a tab can outlive the window it was
+// created in (drag-and-drop between windows). Doing it in the view means it
+// travels with the buffer and isn't duplicated per window.
+void EditorView::attachLanguageServer() {
+    LspManager* lsp = LspManager::instance();
+
+    connect(this, &EditorView::filePathChanged, lsp, [this, lsp](const QString&) {
+        // Covers both opening a file into a fresh tab and Save As, which can
+        // change the language out from under us.
+        lsp->closeDocument(this);
+        lsp->openDocument(this);
+    });
+    connect(this, &EditorView::contentChanged, lsp, [this, lsp](int) {
+        lsp->documentChanged(this);
+    });
+    connect(this, &QObject::destroyed, lsp, [this, lsp] { lsp->closeDocument(this); });
+
+    connect(this, &EditorView::completionRequested, lsp, [this, lsp](int pos) {
+        lsp->requestCompletion(this, pos, [this, pos](const QStringList& labels) {
+            const int wordStart = static_cast<int>(sci_->wordStartPosition(pos, true));
+            showCompletions(labels, qMax(0, pos - wordStart));
+        });
+    });
+    connect(this, &EditorView::hoverRequested, lsp, [this, lsp](int pos) {
+        lsp->requestHover(this, pos, [this, pos](const QString& text) {
+            showHover(pos, text);
+        });
+    });
+
+    connect(lsp, &LspManager::diagnosticsUpdated, this, [this, lsp](const QString& uri) {
+        if (uri != LspManager::UriForPath(path_)) return;
+        setDiagnostics(lsp->diagnosticsFor(uri));
+    });
 }
 
 void EditorView::applyDefaultStyling() {
@@ -47,8 +117,25 @@ void EditorView::applyDefaultStyling() {
 
     sci_->setMarginTypeN(kLineNumberMargin, SC_MARGIN_NUMBER);
     sci_->setMarginWidthN(kLineNumberMargin, 44);
-    sci_->setMarginWidthN(kSymbolMargin, 0);
+    // The symbol margin carries diagnostic markers. It stays narrow rather than
+    // hidden so lines don't shift horizontally the moment an error appears.
+    sci_->setMarginTypeN(kSymbolMargin, SC_MARGIN_SYMBOL);
+    sci_->setMarginWidthN(kSymbolMargin, 12);
+    sci_->setMarginMaskN(kSymbolMargin,
+                         (1 << diag::kErrorMarker) | (1 << diag::kWarningMarker));
     sci_->setMarginWidthN(kFoldMargin, 0);
+
+    sci_->markerDefine(diag::kErrorMarker, SC_MARK_CIRCLE);
+    sci_->markerDefine(diag::kWarningMarker, SC_MARK_CIRCLE);
+    sci_->indicSetStyle(diag::kErrorIndicator, INDIC_SQUIGGLE);
+    sci_->indicSetStyle(diag::kWarningIndicator, INDIC_SQUIGGLE);
+    // Colors come from the theme; these are visible fallbacks for a theme that
+    // omits the diagnostics block.
+    sci_->indicSetFore(diag::kErrorIndicator, 0x0000CC);
+    sci_->indicSetFore(diag::kWarningIndicator, 0x00A0D0);
+
+    // Hover: how long the mouse must rest before dwellStart fires.
+    sci_->setMouseDwellTime(500);
 
     sci_->setCaretLineVisible(true);
     sci_->setCaretLineLayer(SC_LAYER_UNDER_TEXT);
@@ -213,6 +300,98 @@ int EditorView::lineCount() const {
 
 int EditorView::styleAt(int pos) const {
     return static_cast<int>(sci_->styleAt(pos));
+}
+
+std::pair<int, int> EditorView::rangeForDiagnostic(const LspDiagnostic& d) const {
+    // The buffer may have been edited since the server produced this range, so
+    // clamp rather than trust it. See lsp_position.h on why `character` is a
+    // byte offset here.
+    const int docEnd = static_cast<int>(sci_->textLength());
+    const int lastLine = static_cast<int>(sci_->lineFromPosition(docEnd));
+
+    auto resolve = [&](int line, int character) {
+        const int l = qBound(0, line, lastLine);
+        const int lineStart = static_cast<int>(sci_->positionFromLine(l));
+        const int lineEnd = static_cast<int>(sci_->lineEndPosition(l));
+        return qBound(lineStart, lineStart + character, lineEnd);
+    };
+
+    int start = resolve(d.startLine, d.startChar);
+    int end = resolve(d.endLine, d.endChar);
+    if (end < start) std::swap(start, end);
+    // A zero-width range paints nothing. Widen it by one character so an
+    // insertion-point diagnostic is still visible.
+    if (end == start) end = qMin(start + 1, docEnd);
+    return {start, end};
+}
+
+void EditorView::clearDiagnosticDecorations() {
+    const int docEnd = static_cast<int>(sci_->textLength());
+    for (int indicator : {diag::kErrorIndicator, diag::kWarningIndicator}) {
+        sci_->setIndicatorCurrent(indicator);
+        sci_->indicatorClearRange(0, docEnd);
+    }
+    sci_->markerDeleteAll(diag::kErrorMarker);
+    sci_->markerDeleteAll(diag::kWarningMarker);
+}
+
+void EditorView::setDiagnostics(const QVector<LspDiagnostic>& diagnostics) {
+    diagnostics_ = diagnostics;
+    clearDiagnosticDecorations();
+
+    for (const LspDiagnostic& d : diagnostics_) {
+        const bool isError = d.severity <= LspDiagnostic::Error;
+        const auto [start, end] = rangeForDiagnostic(d);
+        if (end <= start) continue;
+
+        sci_->setIndicatorCurrent(isError ? diag::kErrorIndicator : diag::kWarningIndicator);
+        sci_->indicatorFillRange(start, end - start);
+        sci_->markerAdd(sci_->lineFromPosition(start),
+                        isError ? diag::kErrorMarker : diag::kWarningMarker);
+    }
+}
+
+QString EditorView::diagnosticMessageAt(int pos) const {
+    for (const LspDiagnostic& d : diagnostics_) {
+        const auto [start, end] = rangeForDiagnostic(d);
+        if (pos >= start && pos <= end) return d.message;
+    }
+    return {};
+}
+
+void EditorView::showCompletions(const QStringList& labels, int lengthEntered) {
+    if (labels.isEmpty()) {
+        sci_->autoCCancel();
+        return;
+    }
+    // Scintilla splits on the separator and expects the list pre-sorted; the
+    // server returns document order, so sort here.
+    QStringList sorted = labels;
+    sorted.sort();
+    sorted.removeDuplicates();
+
+    sci_->autoCSetSeparator('\n');
+    // Don't steal Enter/Tab when the only candidate is what the user already
+    // typed — that would turn a deliberate newline into an acceptance.
+    sci_->autoCSetChooseSingle(false);
+    sci_->autoCSetIgnoreCase(false);
+    sci_->autoCShow(lengthEntered, sorted.join('\n').toUtf8().constData());
+}
+
+void EditorView::showHover(int pos, const QString& markdown) {
+    // The server wraps signatures in ``` fences and the docstring below them.
+    // Call tips are plain text, so drop the fence lines rather than showing
+    // literal backticks.
+    QStringList lines;
+    for (const QString& line : markdown.split('\n')) {
+        if (line.trimmed().startsWith(QLatin1String("```"))) continue;
+        lines << line;
+    }
+    while (!lines.isEmpty() && lines.first().trimmed().isEmpty()) lines.removeFirst();
+    while (!lines.isEmpty() && lines.last().trimmed().isEmpty()) lines.removeLast();
+    if (lines.isEmpty()) return;
+
+    sci_->callTipShow(pos, lines.join('\n').toUtf8().constData());
 }
 
 void EditorView::setPath(const QString& path) {

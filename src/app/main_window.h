@@ -95,6 +95,12 @@ private slots:
     void runBuffer();
     void runSelection();
     void formatFile();
+    void requestCompletion();
+    void showDocumentation();
+    void restartLanguageServer();
+    // Reflect the active buffer's diagnostics in the status bar: the message
+    // under the caret if there is one, otherwise a count.
+    void updateDiagnosticStatus();
     void pickFont();
     void openRecentFromAction();
     void toggleSplitOrientation();
@@ -168,6 +174,9 @@ private:
     QAction* restartReplAction_ = nullptr;
     QAction* clearReplAction_ = nullptr;
     QAction* formatFileAction_ = nullptr;
+    QAction* completeAction_ = nullptr;
+    QAction* showDocAction_ = nullptr;
+    QAction* restartLspAction_ = nullptr;
     QAction* toggleSplitAction_ = nullptr;
     QAction* toggleReplAction_ = nullptr;
     QAction* saveAction_ = nullptr;

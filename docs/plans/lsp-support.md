@@ -7,6 +7,11 @@ phase 1 has to work around.
 
 Expands on [`PLAN.md`](PLAN.md) §11, which sketched this work but deferred it.
 
+> **Status:** phase 1 has landed — diagnostics, completion, and hover all work
+> against the bundled `tur lsp`, covered by 12 smoke tests in
+> `tests/smoke/test_lsp.py`. Where the implementation departed from this plan,
+> see [Deviations](#deviations-from-this-plan). Phase 2 is not started.
+
 ## Context
 
 Trowel is a Qt6 + Scintilla editor for Turmeric that already bundles a pinned `tur`
@@ -201,6 +206,38 @@ Add the new `src/lsp/*.cpp` files to the **explicit** source list in
 `Qt6::Core` (QJson, QProcess) is already linked.
 
 ---
+
+## Deviations from this plan
+
+Recorded as built, so the next reader doesn't have to diff plan against code.
+
+1. **The editor owns its LSP wiring, not `MainWindow`.** `EditorView`
+   connects itself to `LspManager` in `attachLanguageServer()`. The wiring is
+   per-buffer, not per-window, and a tab can move between windows by drag and
+   drop — doing it in `MainWindow` would have duplicated it per window and
+   broken on the move. `MainWindow` keeps only what is genuinely window-level:
+   the menu actions and the status-bar readout.
+2. **Completion triggers on `(` only, not on space.** The server advertises
+   both. Space fires on nearly every keystroke in a lisp, and each request
+   forces a `didChange` plus a full compile on the server's single thread.
+   **Ctrl+Space** covers explicit completion.
+3. **`LspDiagnostic` lives in its own header** (`lsp/lsp_diagnostic.h`) so
+   `editor_view.h` doesn't pull in the whole manager.
+4. **`wait.diagnostics` grew a `max_count`.** Waiting for diagnostics to
+   *clear* is not expressible with a minimum: `min_count: 0` is satisfied
+   immediately by the stale batch still in the model. Distinguishing
+   "analyzed and clean" from "not analyzed yet" also needed
+   `LspManager::hasPublishedFor`.
+5. **Added `lsp.decorations`**, which reads indicator ranges and marker lines
+   back out of Scintilla. Asserting on the model only proves the manager holds
+   a diagnostic, not that a squiggle was painted.
+6. **Unsaved buffers report why.** They get no language support (no stable
+   URI), and both the explicit completion and documentation actions say so in
+   the status bar rather than doing nothing.
+
+Known gaps, deliberately: a diagnostic whose range the user has since edited is
+clamped rather than tracked, so squiggles can drift until the next publish;
+non-ASCII source is mis-positioned until phase 2 item 2.
 
 ## Phase 2 — Turmeric server improvements (`../turmeric/doc-stuff`)
 

@@ -131,6 +131,22 @@ and reachable; elsewhere the process exits with its last window.
 - `editor.get_selection` → `{text, start, end}`.
 - `editor.set_selection {start, end}`.
 
+### 4.2b Language server
+All of these act on the **active editor tab**. See
+[`lsp-support.md`](lsp-support.md).
+
+- `lsp.status` → `{state: "disabled"|"stopped"|"starting"|"ready"|"failed",
+  error, server_path, enabled}`.
+- `lsp.diagnostics` → `{diagnostics: [{severity, start_line, start_char,
+  end_line, end_char, message, source}], count}` — the model's current batch.
+- `lsp.decorations` → `{error_ranges, warning_ranges, error_marker_lines,
+  warning_marker_lines}` — read back out of **Scintilla**, not out of the
+  model. Distinguishes "a diagnostic exists" from "a squiggle is painted".
+- `lsp.completions {pos?, timeout_ms?}` → `{labels: [string], count}`.
+  Defaults to the caret. Note the server returns nothing at offset 0.
+- `lsp.hover {pos?, timeout_ms?}` → `{text}`.
+- `lsp.restart` — respawns `tur lsp` and drops stale diagnostics.
+
 ### 4.3 REPL / terminal
 - `repl.send {text, newline?: bool = true}` — same code path as user typing
   into the terminal pane; goes through the PTY.
@@ -165,6 +181,12 @@ Two shapes: **wait** (blocks the response until condition met or timeout),
   `quiet_ms`. Used to wait out a `(load ...)` before asserting.
 - `wait.editor_signal {signal: "modifiedChanged"|"filePathChanged", timeout_ms}`.
 - `wait.process_exit {timeout_ms}` — REPL child exited.
+- `wait.diagnostics {min_count = 1, max_count = ∞, timeout_ms}` — resolves once
+  the language server has published a batch for the active buffer whose size is
+  within the bounds. Returns the same shape as `lsp.diagnostics`. `max_count: 0`
+  is how you wait for diagnostics to **clear**; a bare `min_count: 0` would be
+  satisfied by the stale batch that is already there. Errors with `no_uri` for
+  an unsaved buffer, which gets no language support at all.
 - `subscribe {events: [...]}` / `unsubscribe {events: [...]}` — begins
   streaming `{"event": ..., "data": {...}}` frames on the same connection.
 

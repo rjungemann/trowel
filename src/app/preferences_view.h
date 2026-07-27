@@ -22,11 +22,13 @@ signals:
 private slots:
     void commitTurmericPath();
     void commitRainbowBrackets(bool enabled);
+    void commitLspEnabled(bool enabled);
     void restoreDefaults();
 
 private:
     QLineEdit* turPathEdit_ = nullptr;
     QCheckBox* rainbowCheck_ = nullptr;
+    QCheckBox* lspCheck_ = nullptr;
 };
 
 }

@@ -2,6 +2,7 @@
 
 #include "editor/editor_view.h"
 #include "editor/theme_loader.h"
+#include "lsp/lsp_manager.h"
 
 #include <QCheckBox>
 #include <QHBoxLayout>
@@ -49,6 +50,14 @@ PreferencesView::PreferencesView(QWidget* parent)
             this, &PreferencesView::commitRainbowBrackets);
     root->addWidget(rainbowCheck_);
 
+    lspCheck_ = new QCheckBox(QStringLiteral("Language server"), this);
+    lspCheck_->setToolTip(QStringLiteral(
+        "Run `tur lsp` for inline errors, completion, and hover documentation. "
+        "Takes effect on restart."));
+    lspCheck_->setChecked(LspManager::enabledInSettings());
+    connect(lspCheck_, &QCheckBox::toggled, this, &PreferencesView::commitLspEnabled);
+    root->addWidget(lspCheck_);
+
     root->addStretch(1);
 
     auto* buttonRow = new QHBoxLayout();
@@ -87,11 +96,21 @@ void PreferencesView::commitRainbowBrackets(bool enabled) {
     emit rainbowBracketsChanged(enabled);
 }
 
+void PreferencesView::commitLspEnabled(bool enabled) {
+    QSettings().setValue("lsp/enabled", enabled);
+    // Turning it on mid-session is safe — the manager starts lazily on the next
+    // Turmeric document. Turning it off only takes effect on restart, because
+    // LspManager latches Disabled at construction.
+    if (!enabled) LspManager::instance()->shutdown();
+}
+
 void PreferencesView::restoreDefaults() {
     QSettings().remove("repl/turBinary");
     if (turPathEdit_) turPathEdit_->clear();
     QSettings().remove("editor/rainbowBrackets");
     if (rainbowCheck_) rainbowCheck_->setChecked(true);
+    QSettings().remove("lsp/enabled");
+    if (lspCheck_) lspCheck_->setChecked(true);
 }
 
 }

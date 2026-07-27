@@ -31,6 +31,10 @@ struct Theme {
     QColor matchedBraceBg;
     QColor indentGuide;
 
+    // Diagnostic squiggles and gutter markers.
+    QColor diagnosticError;
+    QColor diagnosticWarning;
+
     QColor terminalBg;
     QColor terminalFg;
     QColor terminalCaret;
