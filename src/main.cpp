@@ -5,6 +5,8 @@
 #include "control/control_server.h"
 #include "lsp/lsp_manager.h"
 
+#include "trowel/build_info.h"
+
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QFileInfo>
@@ -19,7 +21,9 @@ int main(int argc, char** argv) {
     trowel::TrowelApplication app(argc, argv);
     QApplication::setApplicationName("Trowel");
     QApplication::setOrganizationName("turmeric");
-    QApplication::setApplicationVersion("0.0.1");
+    // From the VERSION file via CMake, not a hand-edited literal — this had
+    // drifted to "0.0.1" while the project was at 0.0.10.
+    QApplication::setApplicationVersion(TROWEL_VERSION_STRING);
     // Match the installed trowel.desktop so the compositor associates the
     // window with its icon (StartupWMClass=trowel) on Linux desktops.
     QApplication::setDesktopFileName("trowel");
