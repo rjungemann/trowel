@@ -41,6 +41,11 @@ public:
     void setTurBinary(const QString& path) { turBinary_ = path; }
     QString turBinary() const { return turBinary_; }
 
+    // Directory the REPL was last started in — where it is rooted right now.
+    // Empty only before the first start(). A REPL cannot be moved once running
+    // (you cannot chdir another process), so this changes only on restart.
+    QString workingDir() const { return lastWorkingDir_; }
+
     PtySession* pty() const { return pty_; }
 
 signals:

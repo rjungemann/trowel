@@ -17,6 +17,37 @@ def test_repl_multiple_expressions(trowel):
     assert "7" in hit["matched"]
 
 
+def _cwd_banner(trowel):
+    """The most recent 'repl started in <dir>' line on the REPL screen."""
+    lines = [
+        line.strip()
+        for line in trowel.call("repl.get_screen", {"lines": 200})["text"].splitlines()
+        if "repl started in" in line
+    ]
+    return lines[-1] if lines else None
+
+
+def test_repl_banner_reports_working_directory(trowel):
+    """Each REPL says where it is rooted — otherwise the cwd is invisible."""
+    trowel.wait_output("turmeric>", timeout_ms=5000)
+    banner = _cwd_banner(trowel)
+    assert banner is not None, "no startup banner found on the REPL screen"
+    # A window with no file roots at home, shown shell-style as `~`.
+    assert banner.endswith("~"), banner
+
+
+def test_repl_banner_follows_the_file_a_window_opened(trowel, fixture_files):
+    """A REPL restarted with a file open roots in that file's directory."""
+    trowel.wait_output("turmeric>", timeout_ms=5000)
+    trowel.call("editor.open", {"path": str(fixture_files / "hello.tur")})
+    trowel.call("repl.restart")
+    trowel.wait_output("Turmeric v", timeout_ms=5000)
+
+    banner = _cwd_banner(trowel)
+    assert banner is not None
+    assert banner.endswith(fixture_files.name), banner
+
+
 def test_repl_restart_changes_state(trowel):
     trowel.wait_output("turmeric>", timeout_ms=5000)
     trowel.call("repl.restart")

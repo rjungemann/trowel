@@ -31,6 +31,18 @@ QString bundledTurPath() {
 #endif
 }
 
+// Render a directory for the startup banner, abbreviating the user's home to
+// `~` the way a shell prompt would.
+QString displayPath(const QString& path) {
+    if (path.isEmpty()) return QStringLiteral("(inherited)");
+    const QString home = QDir::homePath();
+    if (path == home) return QStringLiteral("~");
+    if (path.startsWith(home + QLatin1Char('/'))) {
+        return QLatin1Char('~') + path.mid(home.size());
+    }
+    return path;
+}
+
 } // namespace
 
 QString ResolveTurBinary() {
@@ -194,7 +206,11 @@ void ReplSession::onPtyData(const QByteArray& bytes) {
 }
 
 void ReplSession::onStarted() {
-    view_->showBanner(QString("[trowel] %1 repl started").arg(turBinary_));
+    // Say where the REPL is rooted, not just that it started: with a REPL per
+    // window, "which directory am I in?" is the question the banner should
+    // answer, and the cwd is otherwise invisible until something breaks.
+    view_->showBanner(QString("[trowel] %1 repl started in %2")
+                          .arg(turBinary_, displayPath(lastWorkingDir_)));
     emit started();
 }
 

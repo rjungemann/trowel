@@ -14,6 +14,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Drag and drop** -- dropping a file onto a window replaces the current tab (prompting first if it has unsaved changes), or fills the tab when the window is empty. Dropping several files replaces the current tab with the first and opens the rest as tabs; dropping a directory opens the directory browser.
 - **Per-window session restore** -- quitting now remembers every open window (tabs, active tab, geometry, REPL visibility) and restores them all on the next launch. Closing a window removes it from the saved session. Existing single-window sessions migrate automatically.
 - **macOS app lifecycle** -- closing the last window leaves Trowel running in the dock, as Mac apps normally do; a dock click or an opened document brings a window back. Linux and Windows continue to exit with the last window.
+- **REPL working-directory indicator** -- the REPL's startup banner now names the directory it is rooted in (`[trowel] tur repl started in ~/projects/foo`, with `$HOME` shown as `~`), so the working directory is visible rather than something you infer. Restarting the REPL reports the new directory too.
 
 ### Fixed
 - **Crash on editor commands with a non-editor tab** -- driving the control socket (`editor.get_text`, `editor.type`, and friends) while a directory browser or the preferences pane was the active tab dereferenced a null editor and killed the app. These commands now return a `no_editor` error.

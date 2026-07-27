@@ -81,6 +81,12 @@ sessions. Where a REPL starts depends on how its window came to be:
 - A **new, empty window** roots its REPL at your home directory — a scratch
   REPL to experiment in.
 
+Each REPL says where it landed when it starts, so you never have to guess:
+
+```
+[trowel] tur repl started in ~/projects/foo
+```
+
 The working directory is fixed when the REPL starts. It deliberately does
 **not** follow you as you switch tabs: a REPL that silently changed
 directory underneath you would break relative paths and anything you had in
