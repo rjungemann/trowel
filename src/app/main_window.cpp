@@ -8,7 +8,10 @@
 #include "app/window_manager.h"
 #include "editor/editor_view.h"
 #include "editor/theme_loader.h"
+#include "lsp/lsp_manager.h"
 #include "repl/repl_session.h"
+
+#include <ScintillaEdit.h>
 #include "repl/run_buffer.h"
 #include "repl/terminal_view.h"
 
@@ -225,6 +228,25 @@ void MainWindow::setupMenus() {
 
     runMenu->addSeparator();
 
+    completeAction_ = new QAction("Complete S&ymbol", this);
+    completeAction_->setShortcut(QKeySequence("Ctrl+Space"));
+    completeAction_->setToolTip("Suggest completions at the caret");
+    connect(completeAction_, &QAction::triggered, this, &MainWindow::requestCompletion);
+    runMenu->addAction(completeAction_);
+
+    showDocAction_ = new QAction("Show &Documentation", this);
+    showDocAction_->setShortcut(QKeySequence("Ctrl+Shift+D"));
+    showDocAction_->setToolTip("Show the type and docstring of the symbol at the caret");
+    connect(showDocAction_, &QAction::triggered, this, &MainWindow::showDocumentation);
+    runMenu->addAction(showDocAction_);
+
+    restartLspAction_ = new QAction("Restart &Language Server", this);
+    restartLspAction_->setToolTip("Restart `tur lsp`");
+    connect(restartLspAction_, &QAction::triggered, this, &MainWindow::restartLanguageServer);
+    runMenu->addAction(restartLspAction_);
+
+    runMenu->addSeparator();
+
     auto* focusEditorAction = runMenu->addAction("Focus &Editor");
     focusEditorAction->setShortcut(QKeySequence("Ctrl+E"));
     connect(focusEditorAction, &QAction::triggered, this, &MainWindow::focusEditor);
@@ -424,7 +446,23 @@ void MainWindow::connectBufferSignals(int index) {
             if (i < 0) return;
             replaceBufferWithFile(i, path);
         });
+        return;
     }
+
+    auto* editor = static_cast<EditorView*>(view);
+    // Caret movement re-reads the diagnostic under the cursor. updateUi also
+    // fires for selection and scroll changes, which is harmless — the readout
+    // is cheap and idempotent.
+    connect(editor->sciWidget(), &ScintillaEditBase::updateUi, this,
+            [this, editor](Scintilla::Update) {
+        if (editor == editorView()) updateDiagnosticStatus();
+    });
+    // EditorView connects to this signal in its own constructor, so by the time
+    // this runs the view has already repainted its indicators.
+    connect(LspManager::instance(), &LspManager::diagnosticsUpdated, this,
+            [this, editor](const QString&) {
+        if (editor == editorView()) updateDiagnosticStatus();
+    });
 }
 
 MainWindow::Buffer* MainWindow::addBuffer(const QString& path, bool untitledIfEmpty) {
@@ -455,6 +493,7 @@ void MainWindow::activateBuffer(int index) {
     if (tabBar_) tabBar_->setActive(index);
     updateWindowTitle();
     updateEditorActionsEnabled();
+    updateDiagnosticStatus();
 }
 
 bool MainWindow::maybeSaveBuffer(int index) {
@@ -945,6 +984,64 @@ void MainWindow::formatFile() {
     const int len = formatted.size();
     v->setSelection(qMin(anchor, len), qMin(caret, len));
     statusBar()->showMessage("Formatted.", 2000);
+}
+
+void MainWindow::requestCompletion() {
+    EditorView* v = editorView();
+    if (!v) return;
+    if (v->filePath().isEmpty()) {
+        statusBar()->show();
+        statusBar()->showMessage(LspManager::kSkipUnsavedReason, 4000);
+        return;
+    }
+    emit v->completionRequested(v->cursorPos());
+}
+
+void MainWindow::showDocumentation() {
+    EditorView* v = editorView();
+    if (!v) return;
+    if (v->filePath().isEmpty()) {
+        statusBar()->show();
+        statusBar()->showMessage(LspManager::kSkipUnsavedReason, 4000);
+        return;
+    }
+    emit v->hoverRequested(v->cursorPos());
+}
+
+void MainWindow::restartLanguageServer() {
+    LspManager::instance()->restart();
+    statusBar()->show();
+    statusBar()->showMessage("Restarting language server…", 2000);
+}
+
+void MainWindow::updateDiagnosticStatus() {
+    EditorView* v = editorView();
+    if (!v) return;
+
+    const auto& diagnostics = v->diagnostics();
+    if (diagnostics.isEmpty()) {
+        statusBar()->clearMessage();
+        statusBar()->hide();
+        return;
+    }
+
+    // Prefer the diagnostic under the caret; fall back to a count so the user
+    // knows something is wrong even when the caret is elsewhere.
+    QString message = v->diagnosticMessageAt(v->cursorPos());
+    if (message.isEmpty()) {
+        int errors = 0;
+        for (const LspDiagnostic& d : diagnostics) {
+            if (d.severity <= LspDiagnostic::Error) errors++;
+        }
+        const int warnings = int(diagnostics.size()) - errors;
+        QStringList parts;
+        if (errors > 0) parts << QString("%1 error%2").arg(errors).arg(errors == 1 ? "" : "s");
+        if (warnings > 0) parts << QString("%1 warning%2").arg(warnings).arg(warnings == 1 ? "" : "s");
+        message = parts.join(", ");
+    }
+
+    statusBar()->show();
+    statusBar()->showMessage(message);
 }
 
 void MainWindow::focusEditor() {

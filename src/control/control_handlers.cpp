@@ -4,6 +4,7 @@
 #include "app/main_window.h"
 #include "app/window_manager.h"
 #include "editor/editor_view.h"
+#include "lsp/lsp_manager.h"
 #include "repl/repl_session.h"
 #include "repl/pty_session.h"
 #include "repl/terminal_view.h"
@@ -411,6 +412,185 @@ void HandleEditorGetStyleAt(MainWindow* w, const QJsonObject& args, const Reply&
     reply(o, nullptr);
 }
 
+// --- Language server -----------------------------------------------------
+
+QJsonObject DiagnosticsToJson(const QVector<LspDiagnostic>& diagnostics) {
+    QJsonArray arr;
+    for (const LspDiagnostic& d : diagnostics) {
+        arr.append(QJsonObject{
+            {"severity", d.severity},
+            {"start_line", d.startLine},
+            {"start_char", d.startChar},
+            {"end_line", d.endLine},
+            {"end_char", d.endChar},
+            {"message", d.message},
+            {"source", d.source},
+        });
+    }
+    QJsonObject o;
+    o["diagnostics"] = arr;
+    o["count"] = arr.size();
+    return o;
+}
+
+const char* LspStateName(LspManager::State s) {
+    switch (s) {
+        case LspManager::State::Disabled: return "disabled";
+        case LspManager::State::Stopped:  return "stopped";
+        case LspManager::State::Starting: return "starting";
+        case LspManager::State::Ready:    return "ready";
+        case LspManager::State::Failed:   return "failed";
+    }
+    return "unknown";
+}
+
+void HandleLspStatus(MainWindow*, const QJsonObject&, const Reply& reply) {
+    LspManager* lsp = LspManager::instance();
+    QJsonObject o;
+    o["state"] = LspStateName(lsp->state());
+    o["error"] = lsp->lastError();
+    o["server_path"] = lsp->serverPath();
+    o["enabled"] = LspManager::enabledInSettings();
+    reply(o, nullptr);
+}
+
+void HandleLspDiagnostics(MainWindow* w, const QJsonObject&, const Reply& reply) {
+    EditorView* e = RequireEditor(w, reply);
+    if (!e) return;
+    reply(DiagnosticsToJson(e->diagnostics()), nullptr);
+}
+
+// Read decorations back out of Scintilla rather than out of our own model.
+// This is what proves setDiagnostics actually painted: the manager holding a
+// diagnostic and the editor showing a squiggle are different claims.
+void HandleLspDecorations(MainWindow* w, const QJsonObject&, const Reply& reply) {
+    EditorView* e = RequireEditor(w, reply);
+    if (!e) return;
+    ScintillaEdit* sci = e->sciWidget();
+    if (!sci) { ReplyErr(reply, "no_editor", "editor has no Scintilla widget"); return; }
+
+    const int docEnd = static_cast<int>(sci->textLength());
+
+    auto rangesFor = [&](int indicator) {
+        QJsonArray out;
+        int pos = 0;
+        while (pos < docEnd) {
+            const int end = static_cast<int>(sci->indicatorEnd(indicator, pos));
+            if (end <= pos) break;  // no further boundaries; also guards progress
+            if (sci->indicatorValueAt(indicator, pos)) {
+                out.append(QJsonObject{{"start", pos}, {"end", end}});
+            }
+            pos = end;
+        }
+        return out;
+    };
+
+    QJsonArray errorMarkerLines;
+    QJsonArray warningMarkerLines;
+    const int lines = e->lineCount();
+    for (int line = 0; line < lines; ++line) {
+        const int mask = static_cast<int>(sci->markerGet(line));
+        if (mask & (1 << diag::kErrorMarker)) errorMarkerLines.append(line);
+        if (mask & (1 << diag::kWarningMarker)) warningMarkerLines.append(line);
+    }
+
+    QJsonObject o;
+    o["error_ranges"] = rangesFor(diag::kErrorIndicator);
+    o["warning_ranges"] = rangesFor(diag::kWarningIndicator);
+    o["error_marker_lines"] = errorMarkerLines;
+    o["warning_marker_lines"] = warningMarkerLines;
+    reply(o, nullptr);
+}
+
+void HandleLspRestart(MainWindow*, const QJsonObject&, const Reply& reply) {
+    LspManager::instance()->restart();
+    reply(Ok(), nullptr);
+}
+
+void HandleLspCompletions(MainWindow* w, const QJsonObject& args, const Reply& reply) {
+    EditorView* e = RequireEditor(w, reply);
+    if (!e) return;
+    const int timeout = args.value("timeout_ms").toInt(5000);
+    const int pos = args.contains("pos") ? args.value("pos").toInt() : e->cursorPos();
+
+    // The manager drops its callback entirely on error or staleness, so the
+    // timeout is what guarantees the control connection gets an answer.
+    auto ctx = std::make_shared<WaitCtx>();
+    LspManager::instance()->requestCompletion(e, pos, [ctx, reply](const QStringList& labels) {
+        if (ctx->done) return;
+        ctx->done = true;
+        if (ctx->timer) ctx->timer->stop();
+        QJsonArray arr;
+        for (const QString& label : labels) arr.append(label);
+        QJsonObject o;
+        o["labels"] = arr;
+        o["count"] = arr.size();
+        reply(o, nullptr);
+    });
+    ArmTimeout(ctx, w, timeout, reply);
+}
+
+void HandleLspHover(MainWindow* w, const QJsonObject& args, const Reply& reply) {
+    EditorView* e = RequireEditor(w, reply);
+    if (!e) return;
+    const int timeout = args.value("timeout_ms").toInt(5000);
+    const int pos = args.contains("pos") ? args.value("pos").toInt() : e->cursorPos();
+
+    auto ctx = std::make_shared<WaitCtx>();
+    LspManager::instance()->requestHover(e, pos, [ctx, reply](const QString& text) {
+        if (ctx->done) return;
+        ctx->done = true;
+        if (ctx->timer) ctx->timer->stop();
+        QJsonObject o;
+        o["text"] = text;
+        reply(o, nullptr);
+    });
+    ArmTimeout(ctx, w, timeout, reply);
+}
+
+void HandleWaitDiagnostics(MainWindow* w, QPointer<ControlConnection> conn,
+                           const QJsonObject& args, const Reply& reply) {
+    EditorView* e = RequireEditor(w, reply);
+    if (!e) return;
+    const int timeout = args.value("timeout_ms").toInt(10000);
+    const int minCount = args.value("min_count").toInt(1);
+    // `max_count` is what lets a caller wait for diagnostics to *clear*: with
+    // min 0 / max 0 the already-published check fails while errors remain, so
+    // the wait blocks until the repaired buffer publishes an empty batch.
+    const int maxCount = args.value("max_count").toInt(INT_MAX);
+    const QString uri = LspManager::UriForPath(e->filePath());
+    if (uri.isEmpty()) {
+        ReplyErr(reply, "no_uri", "buffer has no file path");
+        return;
+    }
+
+    auto satisfied = [minCount, maxCount](int n) { return n >= minCount && n <= maxCount; };
+
+    // The batch may already have landed before the caller started waiting.
+    // hasPublishedFor distinguishes "analyzed and clean" from "not analyzed
+    // yet", which a count alone cannot.
+    LspManager* lsp = LspManager::instance();
+    if (lsp->hasPublishedFor(uri) && satisfied(int(lsp->diagnosticsFor(uri).size()))) {
+        reply(DiagnosticsToJson(lsp->diagnosticsFor(uri)), nullptr);
+        return;
+    }
+
+    auto ctx = std::make_shared<WaitCtx>();
+    ctx->conn = QObject::connect(lsp, &LspManager::diagnosticsUpdated, w,
+        [ctx, reply, uri, satisfied, lsp](const QString& changed) {
+            if (ctx->done || changed != uri) return;
+            if (!lsp->hasPublishedFor(uri)) return;
+            const QVector<LspDiagnostic> d = lsp->diagnosticsFor(uri);
+            if (!satisfied(int(d.size()))) return;
+            ctx->done = true;
+            if (ctx->timer) ctx->timer->stop();
+            QObject::disconnect(ctx->conn);
+            reply(DiagnosticsToJson(d), nullptr);
+        });
+    ArmTimeout(ctx, w, timeout, reply);
+    (void)conn;
+}
+
 // --- REPL ---------------------------------------------------------------
 
 void HandleReplSend(MainWindow* w, const QJsonObject& args, const Reply& reply) {
@@ -696,6 +876,13 @@ void Dispatch(WindowManager* windows, QPointer<ControlConnection> conn,
     if (cmd == "editor.set_selection") { HandleEditorSetSelection(w, args, reply); return; }
     if (cmd == "editor.get_style_at")  { HandleEditorGetStyleAt(w, args, reply); return; }
 
+    if (cmd == "lsp.status")           { HandleLspStatus(w, args, reply); return; }
+    if (cmd == "lsp.diagnostics")      { HandleLspDiagnostics(w, args, reply); return; }
+    if (cmd == "lsp.decorations")      { HandleLspDecorations(w, args, reply); return; }
+    if (cmd == "lsp.completions")      { HandleLspCompletions(w, args, reply); return; }
+    if (cmd == "lsp.hover")            { HandleLspHover(w, args, reply); return; }
+    if (cmd == "lsp.restart")          { HandleLspRestart(w, args, reply); return; }
+
     if (cmd == "repl.send")            { HandleReplSend(w, args, reply); return; }
     if (cmd == "repl.press")           { HandleReplPress(w, args, reply); return; }
     if (cmd == "repl.get_screen")      { HandleReplGetScreen(w, args, reply); return; }
@@ -711,6 +898,7 @@ void Dispatch(WindowManager* windows, QPointer<ControlConnection> conn,
     if (cmd == "wait.repl_idle")       { HandleWaitReplIdle(w, conn, args, reply); return; }
     if (cmd == "wait.editor_signal")   { HandleWaitEditorSignal(w, conn, args, reply); return; }
     if (cmd == "wait.process_exit")    { HandleWaitProcessExit(w, conn, args, reply); return; }
+    if (cmd == "wait.diagnostics")     { HandleWaitDiagnostics(w, conn, args, reply); return; }
 
     ReplyErr(reply, "unknown_cmd", QString("no such command: %1").arg(cmd));
 }

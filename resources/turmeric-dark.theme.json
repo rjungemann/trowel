@@ -13,6 +13,10 @@
         "matchedBraceBackground": "#D48B1C1F",
         "indentGuide": "#252119"
     },
+    "diagnostics": {
+        "error": "#D9735A",
+        "warning": "#EFA030"
+    },
     "terminal": {
         "background": "#0C0A08",
         "foreground": "#EAE0D2",

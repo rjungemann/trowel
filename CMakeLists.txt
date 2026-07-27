@@ -55,6 +55,14 @@ add_library(trowel_lib STATIC
     src/editor/scanner_turmeric.cpp
     src/editor/theme_loader.cpp
     src/editor/theme_loader.h
+    src/lsp/lsp_client.cpp
+    src/lsp/lsp_client.h
+    src/lsp/lsp_manager.cpp
+    src/lsp/lsp_manager.h
+    src/lsp/lsp_position.cpp
+    src/lsp/lsp_position.h
+    src/lsp/lsp_transport.cpp
+    src/lsp/lsp_transport.h
     src/repl/pty_session.cpp
     src/repl/pty_session.h
     src/repl/terminal_view.cpp

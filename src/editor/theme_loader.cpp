@@ -1,5 +1,6 @@
 #include "editor/theme_loader.h"
 
+#include "editor/editor_view.h"
 #include "editor/lexers.h"
 #include "repl/terminal_view.h"
 
@@ -169,6 +170,10 @@ Theme LoadBuiltinDarkTheme() {
     t.matchedBraceBg      = parseColor(ed.value("matchedBraceBackground"), QColor("#D48B1C1F"));
     t.indentGuide         = parseColor(ed.value("indentGuide"),          QColor("#252119"));
 
+    const QJsonObject diagnostics = root.value("diagnostics").toObject();
+    t.diagnosticError   = parseColor(diagnostics.value("error"),   QColor("#D9735A"));
+    t.diagnosticWarning = parseColor(diagnostics.value("warning"), QColor("#EFA030"));
+
     const QJsonObject term = root.value("terminal").toObject();
     t.terminalBg     = parseColor(term.value("background"), t.editorBg);
     t.terminalFg     = parseColor(term.value("foreground"), t.editorFg);
@@ -234,6 +239,17 @@ void ApplyThemeToEditor(ScintillaEdit* sci, const Theme& theme) {
     sci->setSelAlpha(theme.selectionBg.alpha());
     sci->setCaretLineBack(bgra(theme.currentLineBg));
     sci->setCaretLineBackAlpha(48);  // translucent so text on the line stays readable
+
+    // Diagnostic squiggles and their gutter markers. The marker gets a hollow
+    // look (fore = fill color, back = editor background) so it reads as a dot
+    // in the margin rather than a solid block.
+    sci->indicSetFore(diag::kErrorIndicator, bgra(theme.diagnosticError));
+    sci->indicSetFore(diag::kWarningIndicator, bgra(theme.diagnosticWarning));
+    sci->markerSetFore(diag::kErrorMarker, bgra(theme.diagnosticError));
+    sci->markerSetBack(diag::kErrorMarker, bgra(theme.diagnosticError));
+    sci->markerSetFore(diag::kWarningMarker, bgra(theme.diagnosticWarning));
+    sci->markerSetBack(diag::kWarningMarker, bgra(theme.diagnosticWarning));
+    sci->setMarginBackN(1, bgra(theme.editorBg));
 
     // Matched brace.
     sci->styleSetFore(STYLE_BRACELIGHT, bgra(theme.matchedBraceFg));

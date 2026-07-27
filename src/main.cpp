@@ -3,6 +3,7 @@
 #include "app/trowel_application.h"
 #include "app/window_manager.h"
 #include "control/control_server.h"
+#include "lsp/lsp_manager.h"
 
 #include <QApplication>
 #include <QCommandLineParser>
@@ -143,6 +144,12 @@ int main(int argc, char** argv) {
                    "running as a standalone window\n";
         }
     }
+
+    // Shut the language server down cleanly on quit. Without this the child is
+    // only reaped when the transport is destroyed, which on an abrupt exit can
+    // leave a stray `tur lsp` behind.
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, &app,
+                     [] { trowel::LspManager::instance()->shutdown(); });
 
     return QApplication::exec();
 }
