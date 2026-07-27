@@ -92,10 +92,19 @@ The working directory is fixed when the REPL starts. It deliberately does
 directory underneath you would break relative paths and anything you had in
 flight.
 
-When you do want to move it, **Restart REPL** (`Ctrl+Shift+R`) restarts the
-REPL in the current file's directory. Restarting clears REPL state — any
-definitions you have evaluated are gone — which is why it is an explicit
-action rather than something that happens on its own.
+When you do want to move it:
+
+- **Run ▸ Restart REPL** (`Ctrl+Shift+R`) restarts it in the current file's
+  directory.
+- **Run ▸ Restart REPL In…** lets you pick any directory.
+
+Both restart, which clears REPL state — any definitions you have evaluated
+are gone. That is unavoidable: a running process cannot be moved to another
+directory, so changing it means starting a new one. It is also why these are
+explicit actions rather than something that happens on its own.
+
+A directory you pick with **Restart REPL In…** lasts until the next plain
+**Restart REPL**, which goes back to the current file's directory.
 
 ## See also
 

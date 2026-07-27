@@ -1,5 +1,9 @@
 """§3.4 — REPL interaction."""
 
+import pytest
+
+from trowel_ctl import ControlError
+
 
 def test_repl_echoes_result(trowel):
     trowel.wait_output("turmeric>", timeout_ms=5000)
@@ -46,6 +50,49 @@ def test_repl_banner_follows_the_file_a_window_opened(trowel, fixture_files):
     banner = _cwd_banner(trowel)
     assert banner is not None
     assert banner.endswith(fixture_files.name), banner
+
+
+def test_repl_set_cwd_reroots(trowel, fixture_files):
+    """`repl.set_cwd` restarts the REPL in the given directory.
+
+    Both calls are synchronous — set_cwd restarts before replying — so no
+    waiting is needed for the new value to be visible.
+    """
+    trowel.wait_output("turmeric>", timeout_ms=5000)
+    assert trowel.call("repl.get_cwd")["cwd"]  # rooted somewhere to begin with
+
+    assert trowel.call("repl.set_cwd", {"path": str(fixture_files)})["cwd"] == str(
+        fixture_files
+    )
+    assert trowel.call("repl.get_cwd")["cwd"] == str(fixture_files)
+    assert trowel.call("repl.is_running")["running"] is True
+
+
+def test_repl_set_cwd_rejects_non_directories(trowel, fixture_files):
+    trowel.wait_output("turmeric>", timeout_ms=5000)
+    before = trowel.call("repl.get_cwd")["cwd"]
+
+    with pytest.raises(ControlError, match="bad_path"):
+        trowel.call("repl.set_cwd", {"path": str(fixture_files / "hello.tur")})
+    with pytest.raises(ControlError, match="bad_path"):
+        trowel.call("repl.set_cwd", {"path": str(fixture_files / "no-such-dir")})
+
+    # A rejected path must leave the running REPL alone.
+    assert trowel.call("repl.get_cwd")["cwd"] == before
+    assert trowel.call("repl.is_running")["running"] is True
+
+
+def test_restart_repl_returns_to_the_file_directory(trowel, fixture_files):
+    """Plain Restart REPL re-roots to the active file, discarding an explicit
+    set_cwd — the working directory is not sticky."""
+    trowel.wait_output("turmeric>", timeout_ms=5000)
+    trowel.call("editor.open", {"path": str(fixture_files / "hello.tur")})
+    trowel.call("repl.set_cwd", {"path": str(fixture_files.parent)})
+    assert trowel.call("repl.get_cwd")["cwd"] == str(fixture_files.parent)
+
+    # menu.invoke triggers the action synchronously, unlike repl.restart.
+    trowel.call("menu.invoke", {"path": ["Run", "Restart REPL"]})
+    assert trowel.call("repl.get_cwd")["cwd"] == str(fixture_files)
 
 
 def test_repl_restart_changes_state(trowel):

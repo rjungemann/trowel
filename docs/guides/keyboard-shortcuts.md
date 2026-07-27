@@ -38,7 +38,7 @@ Trowel decides where a file opens.
 | --- | --- |
 | `Ctrl+R` | Run buffer (evaluate file) |
 | `Ctrl+Shift+E` | Run selection |
-| `Ctrl+Shift+R` | Restart REPL |
+| `Ctrl+Shift+R` | Restart REPL (in the current file's directory) |
 | `Ctrl+E` | Focus editor |
 | `Ctrl+T` | Focus REPL |
 | ``Ctrl+` `` | Toggle focus between editor and REPL |

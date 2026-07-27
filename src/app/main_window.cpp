@@ -202,9 +202,14 @@ void MainWindow::setupMenus() {
 
     restartReplAction_ = new QAction("Res&tart REPL", this);
     restartReplAction_->setShortcut(QKeySequence("Ctrl+Shift+R"));
-    restartReplAction_->setToolTip("Restart REPL");
+    restartReplAction_->setToolTip("Restart the REPL in the current file's directory");
     connect(restartReplAction_, &QAction::triggered, this, &MainWindow::restartRepl);
     runMenu->addAction(restartReplAction_);
+
+    auto* restartReplInAction = runMenu->addAction("Restart REPL &In…");
+    restartReplInAction->setToolTip("Pick a directory and restart the REPL there");
+    connect(restartReplInAction, &QAction::triggered,
+            this, &MainWindow::restartReplInDirectory);
 
     clearReplAction_ = new QAction("&Clear REPL", this);
     clearReplAction_->setShortcut(QKeySequence("Ctrl+Shift+K"));
@@ -868,6 +873,22 @@ void MainWindow::clearRepl() {
 
 void MainWindow::restartRepl() {
     repl_->restart(replWorkingDir());
+}
+
+void MainWindow::restartReplInDirectory() {
+    if (!repl_) return;
+    // Offer where the REPL is now, so the dialog opens somewhere meaningful
+    // rather than at the filesystem root.
+    QString start = repl_->workingDir();
+    if (start.isEmpty()) start = replWorkingDir();
+
+    const QString dir = QFileDialog::getExistingDirectory(
+        this, "Restart REPL In", start);
+    if (dir.isEmpty()) return;  // cancelled
+
+    // A running process cannot be moved, so "set the directory" is necessarily
+    // a restart — which is why the menu entry says so.
+    repl_->restart(dir);
 }
 
 void MainWindow::runBuffer() {

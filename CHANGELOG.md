@@ -15,6 +15,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Per-window session restore** -- quitting now remembers every open window (tabs, active tab, geometry, REPL visibility) and restores them all on the next launch. Closing a window removes it from the saved session. Existing single-window sessions migrate automatically.
 - **macOS app lifecycle** -- closing the last window leaves Trowel running in the dock, as Mac apps normally do; a dock click or an opened document brings a window back. Linux and Windows continue to exit with the last window.
 - **REPL working-directory indicator** -- the REPL's startup banner now names the directory it is rooted in (`[trowel] tur repl started in ~/projects/foo`, with `$HOME` shown as `~`), so the working directory is visible rather than something you infer. Restarting the REPL reports the new directory too.
+- **Run > Restart REPL In…** -- pick any directory and restart this window's REPL there. A running process cannot be moved between directories, so changing it necessarily restarts the REPL (clearing its state) -- which is why the menu entry says "Restart". The chosen directory holds until the next plain **Restart REPL**, which returns to the current file's directory.
+
+### Changed
+- **Restart REPL tooltip** -- now states what it has always done: restarts the REPL in the current file's directory.
 
 ### Fixed
 - **Crash on editor commands with a non-editor tab** -- driving the control socket (`editor.get_text`, `editor.type`, and friends) while a directory browser or the preferences pane was the active tab dereferenced a null editor and killed the app. These commands now return a `no_editor` error.
