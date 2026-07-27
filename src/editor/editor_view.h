@@ -1,6 +1,7 @@
 #pragma once
 
 #include "app/tab_content.h"
+#include "editor/lexers.h"
 
 #include <QFont>
 #include <QString>
@@ -36,6 +37,9 @@ public:
     void setRainbowBrackets(bool enabled);
     bool rainbowBrackets() const { return rainbow_; }
 
+    // Language this buffer is highlighted as, derived from its path.
+    Language language() const { return language_; }
+
     // Default rainbow-bracket preference, read from QSettings.
     static bool rainbowBracketsDefault();
 
@@ -54,11 +58,14 @@ public:
 private:
     void applyDefaultStyling();
     void setPath(const QString& path);
+    // Install a lexer for the current language + rainbow setting and re-lex.
+    void installLexer();
 
     ScintillaEdit* sci_;
     QString path_;
     QFont currentFont_;
     bool rainbow_ = true;
+    Language language_ = Language::Turmeric;
 };
 
 }

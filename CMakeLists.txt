@@ -43,8 +43,14 @@ add_library(trowel_lib STATIC
     src/app/trowel_application.h
     src/editor/editor_view.cpp
     src/editor/editor_view.h
-    src/editor/turmeric_lexer.cpp
-    src/editor/turmeric_lexer.h
+    src/editor/lexers.h
+    src/editor/lexer_adapter.cpp
+    src/editor/scanner.h
+    src/editor/scanner_c.cpp
+    src/editor/scanner_json.cpp
+    src/editor/scanner_just.cpp
+    src/editor/scanner_markdown.cpp
+    src/editor/scanner_turmeric.cpp
     src/editor/theme_loader.cpp
     src/editor/theme_loader.h
     src/repl/pty_session.cpp

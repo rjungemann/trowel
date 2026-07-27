@@ -664,7 +664,8 @@ void MainWindow::openFile() {
     const QString last = settings.value("lastOpenDir", QDir::homePath()).toString();
     const QStringList paths = QFileDialog::getOpenFileNames(
         this, "Open", last,
-        "All files (*);;Turmeric (*.tur *.tur.sweet)");
+        "All files (*);;Turmeric (*.tur *.tur.sweet);;Markdown (*.md *.markdown);;"
+        "JSON (*.json);;C (*.c *.h);;Justfile (Justfile justfile *.just)");
     if (paths.isEmpty()) return;
     for (const QString& path : paths) {
         if (QFileInfo(path).isDir()) {
@@ -707,7 +708,8 @@ bool MainWindow::saveBufferAs(int index) {
     const QString last = settings.value("lastOpenDir", QDir::homePath()).toString();
     const QString path = QFileDialog::getSaveFileName(
         this, "Save As", last,
-        "Turmeric (*.tur *.tur.sweet);;All files (*)");
+        "Turmeric (*.tur *.tur.sweet);;Markdown (*.md *.markdown);;JSON (*.json);;"
+        "C (*.c *.h);;Justfile (Justfile justfile *.just);;All files (*)");
     if (path.isEmpty()) return false;
     if (!v->saveFile(path)) {
         QMessageBox::warning(this, "Trowel", QString("Could not save %1").arg(path));

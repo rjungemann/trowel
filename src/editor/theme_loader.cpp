@@ -1,6 +1,6 @@
 #include "editor/theme_loader.h"
 
-#include "editor/turmeric_lexer.h"
+#include "editor/lexers.h"
 #include "repl/terminal_view.h"
 
 #include <ScintillaEdit.h>
@@ -39,57 +39,108 @@ int bgra(const QColor& c) {
     return (c.blue() << 16) | (c.green() << 8) | c.red();
 }
 
-int scStyleFor(TurStyle s) {
-    return static_cast<int>(s);
-}
-
-void setStyle(ScintillaEdit* sci, TurStyle style, const StyleSpec& spec,
+void setStyle(ScintillaEdit* sci, int id, const StyleSpec& spec,
               const QColor& defaultBg) {
-    const int id = scStyleFor(style);
     if (spec.fg.isValid()) sci->styleSetFore(id, bgra(spec.fg));
     sci->styleSetBack(id, bgra(spec.bg.isValid() ? spec.bg : defaultBg));
     sci->styleSetBold(id, spec.bold);
     sci->styleSetItalic(id, spec.italic);
 }
 
-const QHash<QString, TurStyle>& StyleKeyMap() {
-    static const QHash<QString, TurStyle> m = {
-        {"default",      TurStyle::Default},
-        {"lineComment",  TurStyle::LineComment},
-        {"docComment",   TurStyle::DocComment},
-        {"blockComment", TurStyle::BlockComment},
-        {"string",       TurStyle::String},
-        {"stringEscape", TurStyle::StringEscape},
-        {"number",       TurStyle::Number},
-        {"boolean",      TurStyle::Boolean},
-        {"nil",          TurStyle::Nil},
-        {"keywordLit",   TurStyle::KeywordLit},
-        {"charLit",      TurStyle::CharLit},
-        {"metadata",     TurStyle::Metadata},
-        {"quote",        TurStyle::Quote},
-        {"operator",     TurStyle::Operator},
-        {"define",       TurStyle::Define},
-        {"control",      TurStyle::Control},
-        {"type",         TurStyle::Type},
-        {"effect",       TurStyle::Effect},
-        {"except",       TurStyle::Except},
-        {"special",      TurStyle::Special},
-        {"builtin",      TurStyle::Builtin},
-        {"cblock",       TurStyle::CBlock},
-        {"langDir",      TurStyle::LangDir},
-        {"delim",        TurStyle::Delim},
-        {"curlyInfix",   TurStyle::CurlyInfix},
-        {"neotericCall", TurStyle::NeotericCall},
-        {"identifier",   TurStyle::Identifier},
-        {"invalid",      TurStyle::Invalid},
-        {"rainbow0",     TurStyle::Rainbow0},
-        {"rainbow1",     TurStyle::Rainbow1},
-        {"rainbow2",     TurStyle::Rainbow2},
-        {"rainbow3",     TurStyle::Rainbow3},
-        {"rainbow4",     TurStyle::Rainbow4},
-        {"rainbow5",     TurStyle::Rainbow5},
-        {"rainbow6",     TurStyle::Rainbow6},
-        {"bracketError", TurStyle::BracketError},
+// Theme keys to Scintilla style slots. Turmeric's keys are unprefixed for
+// backwards compatibility with existing theme files; every other language
+// namespaces its own.
+const QHash<QString, int>& StyleKeyMap() {
+    auto id = [](auto style) { return static_cast<int>(style); };
+    static const QHash<QString, int> m = {
+        {"default",      id(TurStyle::Default)},
+        {"lineComment",  id(TurStyle::LineComment)},
+        {"docComment",   id(TurStyle::DocComment)},
+        {"blockComment", id(TurStyle::BlockComment)},
+        {"string",       id(TurStyle::String)},
+        {"stringEscape", id(TurStyle::StringEscape)},
+        {"number",       id(TurStyle::Number)},
+        {"boolean",      id(TurStyle::Boolean)},
+        {"nil",          id(TurStyle::Nil)},
+        {"keywordLit",   id(TurStyle::KeywordLit)},
+        {"charLit",      id(TurStyle::CharLit)},
+        {"metadata",     id(TurStyle::Metadata)},
+        {"quote",        id(TurStyle::Quote)},
+        {"operator",     id(TurStyle::Operator)},
+        {"define",       id(TurStyle::Define)},
+        {"control",      id(TurStyle::Control)},
+        {"type",         id(TurStyle::Type)},
+        {"effect",       id(TurStyle::Effect)},
+        {"except",       id(TurStyle::Except)},
+        {"special",      id(TurStyle::Special)},
+        {"builtin",      id(TurStyle::Builtin)},
+        {"cblock",       id(TurStyle::CBlock)},
+        {"langDir",      id(TurStyle::LangDir)},
+        {"delim",        id(TurStyle::Delim)},
+        {"curlyInfix",   id(TurStyle::CurlyInfix)},
+        {"neotericCall", id(TurStyle::NeotericCall)},
+        {"identifier",   id(TurStyle::Identifier)},
+        {"invalid",      id(TurStyle::Invalid)},
+        {"rainbow0",     id(TurStyle::Rainbow0)},
+        {"rainbow1",     id(TurStyle::Rainbow1)},
+        {"rainbow2",     id(TurStyle::Rainbow2)},
+        {"rainbow3",     id(TurStyle::Rainbow3)},
+        {"rainbow4",     id(TurStyle::Rainbow4)},
+        {"rainbow5",     id(TurStyle::Rainbow5)},
+        {"rainbow6",     id(TurStyle::Rainbow6)},
+        {"bracketError", id(TurStyle::BracketError)},
+
+        {"c.default",      id(CStyle::Default)},
+        {"c.comment",      id(CStyle::Comment)},
+        {"c.docComment",   id(CStyle::DocComment)},
+        {"c.preproc",      id(CStyle::Preproc)},
+        {"c.keyword",      id(CStyle::Keyword)},
+        {"c.type",         id(CStyle::Type)},
+        {"c.string",       id(CStyle::String)},
+        {"c.stringEscape", id(CStyle::StringEscape)},
+        {"c.char",         id(CStyle::Char)},
+        {"c.number",       id(CStyle::Number)},
+        {"c.operator",     id(CStyle::Operator)},
+        {"c.identifier",   id(CStyle::Identifier)},
+
+        {"md.default",    id(MdStyle::Default)},
+        {"md.heading",    id(MdStyle::Heading)},
+        {"md.emphasis",   id(MdStyle::Emphasis)},
+        {"md.strong",     id(MdStyle::Strong)},
+        {"md.codeSpan",   id(MdStyle::CodeSpan)},
+        {"md.fence",      id(MdStyle::Fence)},
+        {"md.codeBlock",  id(MdStyle::CodeBlock)},
+        {"md.linkText",   id(MdStyle::LinkText)},
+        {"md.linkUrl",    id(MdStyle::LinkUrl)},
+        {"md.blockquote", id(MdStyle::Blockquote)},
+        {"md.listMarker", id(MdStyle::ListMarker)},
+        {"md.rule",       id(MdStyle::Rule)},
+        {"md.html",       id(MdStyle::Html)},
+        {"md.escape",     id(MdStyle::Escape)},
+
+        {"json.default",      id(JsonStyle::Default)},
+        {"json.key",          id(JsonStyle::Key)},
+        {"json.string",       id(JsonStyle::String)},
+        {"json.stringEscape", id(JsonStyle::StringEscape)},
+        {"json.number",       id(JsonStyle::Number)},
+        {"json.literal",      id(JsonStyle::Literal)},
+        {"json.operator",     id(JsonStyle::Operator)},
+        {"json.error",        id(JsonStyle::Error)},
+
+        {"just.default",       id(JustStyle::Default)},
+        {"just.comment",       id(JustStyle::Comment)},
+        {"just.recipeName",    id(JustStyle::RecipeName)},
+        {"just.dependency",    id(JustStyle::Dependency)},
+        {"just.parameter",     id(JustStyle::Parameter)},
+        {"just.assign",        id(JustStyle::Assign)},
+        {"just.interpolation", id(JustStyle::Interpolation)},
+        {"just.backtick",      id(JustStyle::Backtick)},
+        {"just.keyword",       id(JustStyle::Keyword)},
+        {"just.string",        id(JustStyle::String)},
+        {"just.number",        id(JustStyle::Number)},
+        {"just.body",          id(JustStyle::Body)},
+        {"just.attribute",     id(JustStyle::Attribute)},
+        {"just.operator",      id(JustStyle::Operator)},
     };
     return m;
 }

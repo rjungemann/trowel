@@ -1,0 +1,8 @@
+# Build everything
+preset := "macos-debug"
+
+build: configure
+    cmake --build --preset {{preset}}
+
+configure:
+    cmake --preset {{preset}}

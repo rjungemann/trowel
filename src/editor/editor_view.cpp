@@ -1,7 +1,7 @@
 #include "editor/editor_view.h"
 
+#include "editor/lexers.h"
 #include "editor/theme_loader.h"
-#include "editor/turmeric_lexer.h"
 
 #include <ScintillaEdit.h>
 
@@ -32,7 +32,7 @@ EditorView::EditorView(QWidget* parent)
     applyDefaultStyling();
 
     rainbow_ = rainbowBracketsDefault();
-    sci_->setILexer(reinterpret_cast<sptr_t>(CreateTurmericLexer(false, rainbow_)));
+    installLexer();
     ApplyThemeToEditor(sci_, LoadBuiltinDarkTheme());
 
     connect(sci_, &ScintillaEditBase::savePointChanged, this, [this](bool dirty) {
@@ -82,13 +82,9 @@ void EditorView::setFont(const QFont& font) {
     sci_->styleSetSize(STYLE_DEFAULT, size);
     sci_->styleSetFont(STYLE_LINENUMBER, family.constData());
     sci_->styleSetSize(STYLE_LINENUMBER, size);
-    for (int s = 0; s < static_cast<int>(TurStyle::Count); ++s) {
-        sci_->styleSetFont(s, family.constData());
-        sci_->styleSetSize(s, size);
-    }
-    // Rainbow bracket styles live above the predefined range, so update them
-    // explicitly too.
-    for (int s = static_cast<int>(TurStyle::Rainbow0); s <= kHighestStyle; ++s) {
+    // Covers every language's block plus the rainbow bracket styles, all of
+    // which live outside Scintilla's predefined 32..39 range.
+    for (int s = 0; s <= kMaxStyleId; ++s) {
         sci_->styleSetFont(s, family.constData());
         sci_->styleSetSize(s, size);
     }
@@ -98,15 +94,18 @@ bool EditorView::rainbowBracketsDefault() {
     return QSettings().value("editor/rainbowBrackets", true).toBool();
 }
 
+void EditorView::installLexer() {
+    // Scintilla takes ownership and releases any previously installed lexer.
+    sci_->setILexer(reinterpret_cast<sptr_t>(CreateLexerForLanguage(language_, rainbow_)));
+    // Re-lex the whole document so existing text picks up the new styling
+    // immediately.
+    sci_->colourise(0, -1);
+}
+
 void EditorView::setRainbowBrackets(bool enabled) {
     if (rainbow_ == enabled) return;
     rainbow_ = enabled;
-    // Swap in a fresh lexer configured for the new mode; Scintilla takes
-    // ownership and releases the old one.
-    sci_->setILexer(reinterpret_cast<sptr_t>(CreateTurmericLexer(false, rainbow_)));
-    // Re-lex the whole document so existing text picks up the new bracket
-    // styling immediately.
-    sci_->colourise(0, -1);
+    installLexer();
 }
 
 bool EditorView::loadFile(const QString& path) {
@@ -219,6 +218,13 @@ int EditorView::styleAt(int pos) const {
 void EditorView::setPath(const QString& path) {
     if (path_ == path) return;
     path_ = path;
+    // Re-highlight when the path implies a different language. This covers
+    // opening a file into a fresh tab as well as Save As to a new extension.
+    const Language lang = LanguageForPath(path_);
+    if (lang != language_) {
+        language_ = lang;
+        installLexer();
+    }
     emit filePathChanged(path_);
 }
 

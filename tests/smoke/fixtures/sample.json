@@ -1,0 +1,6 @@
+{
+  "name": "trowel",
+  "version": 10,
+  "nested": { "ok": true, "missing": null },
+  "list": [1, 2.5, "three"]
+}
