@@ -131,6 +131,23 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     endif()
 endif()
 
+# Regenerated whenever the version above changes, which is what forces the
+# `trowel` target to relink and therefore reruns the POST_BUILD staging below.
+# See the comment in cmake/build_info.h.in — without this, bumping the toolchain
+# leaves the previous `tur` staged in the bundle and the build says it has
+# nothing to do.
+if(_turmeric_key)
+    set(TROWEL_BUNDLED_TURMERIC "${TROWEL_TURMERIC_VERSION}")
+else()
+    set(TROWEL_BUNDLED_TURMERIC "")
+endif()
+configure_file(
+    "${CMAKE_SOURCE_DIR}/cmake/build_info.h.in"
+    "${CMAKE_BINARY_DIR}/generated/trowel/build_info.h"
+    @ONLY
+)
+target_include_directories(trowel PRIVATE "${CMAKE_BINARY_DIR}/generated")
+
 if(_turmeric_key)
     include(FetchContent)
     FetchContent_Declare(turmeric_prebuilt
