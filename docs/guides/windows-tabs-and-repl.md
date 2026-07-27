@@ -106,6 +106,22 @@ explicit actions rather than something that happens on its own.
 A directory you pick with **Restart REPL In…** lasts until the next plain
 **Restart REPL**, which goes back to the current file's directory.
 
+### Moving without restarting
+
+Newer versions of `tur repl` understand `:cd` and `:pwd`:
+
+```
+turmeric> :pwd
+/Users/you/projects/demo
+turmeric> :cd src
+/Users/you/projects/demo/src
+```
+
+Because that changes the directory *inside* the running REPL, **nothing is
+lost** — everything you have defined is still there. Trowel notices the move
+and updates what it reports, so the two stay in agreement. If your `tur` is
+older and does not know `:cd`, the menu commands above are the way to move.
+
 ## See also
 
 - [Keyboard shortcuts](keyboard-shortcuts.md) — the full key map.

@@ -53,6 +53,9 @@ signals:
     void stopped(int exitCode);
     void dataReceived(const QByteArray& bytes);
     void busyChanged(bool busy);
+    // The REPL reported a new working directory (OSC 7) — e.g. after `:cd`,
+    // which moves the live process without a restart.
+    void workingDirChanged(const QString& dir);
 
 private:
     void onStarted();
@@ -60,6 +63,12 @@ private:
     void onStartFailed(const QString& message);
     void onPtyData(const QByteArray& bytes);
     void setBusy(bool busy);
+    // Scan for OSC 7 cwd reports. Kept separate from the OSC 133 prompt-marker
+    // scan above rather than folded into one generic OSC parser: the two carry
+    // very different payload sizes (a 7-byte marker vs. a full path), and the
+    // prompt-marker path is load-bearing for busy/idle tracking.
+    void scanCwdReports(const QByteArray& bytes);
+    void applyCwdReport(const QByteArray& uri);
 
     TerminalView* view_;
     PtySession* pty_ = nullptr;
@@ -71,6 +80,9 @@ private:
     bool busy_ = true;
     // Rolling tail of unmatched bytes (partial OSC sequence spanning chunks).
     QByteArray scanTail_;
+    // Same idea for OSC 7, which carries a whole path and so needs a much
+    // larger carry than the prompt-marker scan allows.
+    QByteArray cwdTail_;
 };
 
 }

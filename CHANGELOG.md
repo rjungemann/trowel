@@ -17,6 +17,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **REPL working-directory indicator** -- the REPL's startup banner now names the directory it is rooted in (`[trowel] tur repl started in ~/projects/foo`, with `$HOME` shown as `~`), so the working directory is visible rather than something you infer. Restarting the REPL reports the new directory too.
 - **Run > Restart REPL In…** -- pick any directory and restart this window's REPL there. A running process cannot be moved between directories, so changing it necessarily restarts the REPL (clearing its state) -- which is why the menu entry says "Restart". The chosen directory holds until the next plain **Restart REPL**, which returns to the current file's directory.
 
+- **Follows the REPL's own `:cd`** -- when the REPL reports a working-directory change (OSC 7, emitted by `tur repl`'s `:cd`), Trowel updates what it reports so the two stay in agreement. Unlike the menu commands this needs no restart, so REPL state survives. Inert with a `tur` that does not emit it.
+
 ### Changed
 - **Restart REPL tooltip** -- now states what it has always done: restarts the REPL in the current file's directory.
 

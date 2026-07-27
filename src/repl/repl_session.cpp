@@ -8,6 +8,7 @@
 #include <QFileInfo>
 #include <QSettings>
 #include <QStandardPaths>
+#include <QUrl>
 
 namespace trowel {
 
@@ -31,16 +32,31 @@ QString bundledTurPath() {
 #endif
 }
 
-// Render a directory for the startup banner, abbreviating the user's home to
-// `~` the way a shell prompt would.
-QString displayPath(const QString& path) {
-    if (path.isEmpty()) return QStringLiteral("(inherited)");
-    const QString home = QDir::homePath();
+// Replace a leading `home` with `~`, or return empty when it isn't a prefix.
+QString abbreviateHome(const QString& path, const QString& home) {
+    if (path.isEmpty() || home.isEmpty()) return {};
     if (path == home) return QStringLiteral("~");
     if (path.startsWith(home + QLatin1Char('/'))) {
         return QLatin1Char('~') + path.mid(home.size());
     }
-    return path;
+    return {};
+}
+
+// Render a directory for a banner, abbreviating the user's home to `~` the way
+// a shell prompt would.
+QString displayPath(const QString& path) {
+    if (path.isEmpty()) return QStringLiteral("(inherited)");
+
+    QString shown = abbreviateHome(path, QDir::homePath());
+    if (shown.isEmpty()) {
+        // Try again canonically. A cwd reported by the REPL comes from
+        // getcwd(), which resolves symlinks (/private/var/… on macOS), while
+        // QDir::homePath() does not — so the literal prefix test above misses
+        // and the home directory would be printed in full.
+        shown = abbreviateHome(QFileInfo(path).canonicalFilePath(),
+                               QFileInfo(QDir::homePath()).canonicalFilePath());
+    }
+    return shown.isEmpty() ? path : shown;
 }
 
 } // namespace
@@ -202,7 +218,74 @@ void ReplSession::onPtyData(const QByteArray& bytes) {
         scanTail_ = buf.mid(lastEsc);
     }
 
+    scanCwdReports(bytes);
+
     emit dataReceived(bytes);
+}
+
+// Scan for OSC 7 cwd reports: ESC ] 7 ; file://<host>/<path> {BEL | ESC \}.
+// `tur repl` emits one at startup and after `:cd`, which moves the live
+// process — the one way the working directory changes without a restart.
+void ReplSession::scanCwdReports(const QByteArray& bytes) {
+    static constexpr char kCwdPrefix[] = "\x1b]7;";
+    static constexpr int kCwdPrefixLen = sizeof(kCwdPrefix) - 1;
+    // Generous next to the prompt-marker carry, because the payload is a whole
+    // path — but still bounded, so a stream of stray ESCs can't grow it.
+    static constexpr int kMaxCarry = 4096;
+
+    QByteArray buf = cwdTail_ + bytes;
+    cwdTail_.clear();
+
+    int i = 0;
+    while ((i = buf.indexOf(kCwdPrefix, i)) >= 0) {
+        const int start = i + kCwdPrefixLen;
+        int end = -1;
+        int next = -1;
+        for (int j = start; j < buf.size(); ++j) {
+            const char c = buf.at(j);
+            if (c == '\x07') { end = j; next = j + 1; break; }
+            if (c == '\x1b') {
+                if (j + 1 >= buf.size()) break;  // partial ST — need more bytes
+                if (buf.at(j + 1) == '\\') { end = j; next = j + 2; }
+                break;                           // any other ESC ends this OSC
+            }
+        }
+        if (end < 0) {
+            // Unterminated: hold it for the next chunk if it is a plausible size.
+            if (buf.size() - i <= kMaxCarry) cwdTail_ = buf.mid(i);
+            return;
+        }
+        applyCwdReport(buf.mid(start, end - start));
+        i = next;
+    }
+
+    // Hold a trailing partial prefix (down to a bare ESC) for the next read.
+    const int lastEsc = buf.lastIndexOf('\x1b');
+    if (lastEsc >= 0 && buf.size() - lastEsc < kCwdPrefixLen) {
+        cwdTail_ = buf.mid(lastEsc);
+    }
+}
+
+void ReplSession::applyCwdReport(const QByteArray& uri) {
+    const QUrl url(QString::fromUtf8(uri));
+    if (!url.isLocalFile()) return;
+    const QString dir = url.toLocalFile();
+    if (dir.isEmpty()) return;
+
+    // Compare canonically: the REPL reports getcwd(), which resolves symlinks,
+    // while we started it with whatever path the editor had. On macOS that
+    // alone differs (/tmp vs /private/tmp) and would otherwise announce a move
+    // that never happened, on every launch.
+    const QString incoming = QFileInfo(dir).canonicalFilePath();
+    const QString current = QFileInfo(lastWorkingDir_).canonicalFilePath();
+    if (!incoming.isEmpty() && incoming == current) {
+        lastWorkingDir_ = dir;  // same place, just spelled differently
+        return;
+    }
+
+    lastWorkingDir_ = dir;
+    view_->showBanner(QString("[trowel] repl cwd is now %1").arg(displayPath(dir)));
+    emit workingDirChanged(dir);
 }
 
 void ReplSession::onStarted() {
