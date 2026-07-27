@@ -130,21 +130,33 @@ into `ReplSession`'s existing scanner.
 This makes B1's indicator *live* rather than start-only, and keeps
 `repl.get_cwd` honest, with no shadow buffer anywhere.
 
-### Staging
+### Staging ✅ Both done
 
-Because half of Option B lives in another repo:
+- **B3a (Trowel).** `ReplSession` scans for OSC 7 and updates the cached
+  cwd, announcing the move with a banner and keeping `repl.get_cwd`
+  honest. Inert when nothing emits it.
+- **B3b (Turmeric).** `:cd` / `:pwd` in `tur repl`, emitting OSC 7 on
+  change and at startup —
+  [turmeric#738](https://github.com/rjungemann/turmeric/pull/738).
 
-- **B3a (Trowel, now).** Consume OSC 7 in `ReplSession`'s existing OSC
-  scanner; update the cached cwd, refresh the B1 indicator, and keep
-  `repl.get_cwd` accurate whenever the REPL reports a change. Harmless
-  if nothing ever sends it.
-- **B3b (Turmeric, upstream).** Add `:cd` / `:pwd` to `tur repl` and
-  have it emit OSC 7 on change.
+Option B proved out end-to-end: `:cd` moves the live REPL, Trowel follows
+the directory, the process id is unchanged, and a value defined before
+the `:cd` is still bound after it. That is the payoff over B2's restart.
 
-Trowel therefore ships the indicator and the GUI command immediately,
-and the meta-command lights up the moment the Turmeric side lands — with
-no fragile interception layer, and no dependency in B1/B2 on upstream
-work.
+**Two implementation notes.**
+
+The OSC 7 scan is *separate* from the existing OSC 133 prompt-marker
+scan rather than folded into one generic OSC parser. The two carry very
+different payloads — a 7-byte marker versus a full path — and the
+prompt-marker path is load-bearing for busy/idle tracking with no direct
+test coverage. Rewriting it to accommodate a longer carry buffer was not
+worth the risk; the duplication is a few lines.
+
+`displayPath()` had to learn to compare canonically. The REPL reports
+`getcwd()`, which resolves symlinks (`/private/var/…` on macOS), while
+`QDir::homePath()` does not — so the literal prefix test missed and the
+banner printed the home directory in full. Caught by the end-to-end
+test, not by reading.
 
 ## Milestones
 
