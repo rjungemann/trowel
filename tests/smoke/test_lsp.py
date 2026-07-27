@@ -106,12 +106,7 @@ def test_diagnostics_clear_when_the_error_is_fixed(trowel, fixture_files: Path):
 
 
 def _completions_at_end(trowel, extra_text: str = "") -> dict:
-    """Request completions with the caret at the end of the buffer.
-
-    Position matters: `tur lsp` returns nothing at offset 0 (there is no
-    enclosing form to complete in), so a request right after editor.open would
-    be vacuously empty. End-of-buffer is where a user actually types.
-    """
+    """Append `extra_text`, park the caret at the end, and complete there."""
     text = trowel.call("editor.get_text")["text"] + extra_text
     trowel.call("editor.set_text", {"text": text})
     trowel.call("editor.set_cursor", {"pos": len(text.encode("utf-8"))})
@@ -122,9 +117,31 @@ def test_completion_returns_symbols(trowel, fixture_files: Path):
     _require_server(trowel)
     _open_and_analyze(trowel, fixture_files / "defs.tur")
 
-    r = _completions_at_end(trowel, "\n")
+    # Offset 0 is the obvious thing a client does — ask for completions right
+    # after opening a file. It used to return nothing (the server derived its
+    # prefix with a helper built for hover, which stepped right and filtered
+    # every candidate away), which was indistinguishable from "no matches".
+    # Fixed in Turmeric v0.32.2; pinned here so it stays fixed.
+    trowel.call("editor.set_cursor", {"pos": 0})
+    r = trowel.call("lsp.completions", {"timeout_ms": WAIT_MS})
     assert r["count"] > 0
     assert all(isinstance(label, str) and label for label in r["labels"])
+
+
+def test_completion_survives_an_unbalanced_buffer(trowel, fixture_files: Path):
+    """Typing `(` unbalances the buffer — completion must still work.
+
+    Not parsing is the *normal* state mid-keystroke, and the server builds its
+    symbol index from a successful compile. It used to return nothing here,
+    which meant completion went silent exactly when it was wanted. v0.32.2
+    retains the last good index (and falls back to stdlib for a file that has
+    never parsed), so the buffer's own defs still come back.
+    """
+    _require_server(trowel)
+    _open_and_analyze(trowel, fixture_files / "defs.tur")
+
+    r = _completions_at_end(trowel, "\n(smoke")
+    assert any("smoke-" in label for label in r["labels"]), r["labels"][:20]
 
 
 def test_completion_includes_document_symbols(trowel, fixture_files: Path):
@@ -132,12 +149,8 @@ def test_completion_includes_document_symbols(trowel, fixture_files: Path):
     _open_and_analyze(trowel, fixture_files / "defs.tur")
 
     # Caret inside `smoke-x` in `(def smoke-x 42)`. Completing the symbol under
-    # the caret is what surfaces the buffer's own defs; the unfiltered
-    # end-of-buffer list is capped at 200 stdlib symbols and buries them.
-    #
-    # Note this deliberately does NOT type a fresh prefix like "(smoke": that
-    # unbalances the buffer, the server's compile fails, and it collects no
-    # symbols at all — so completion legitimately returns nothing.
+    # the caret surfaces the buffer's own defs; the unfiltered list is capped
+    # at 200 server-side and would bury them.
     trowel.call("editor.set_cursor", {"pos": 5})
     r = trowel.call("lsp.completions", {"timeout_ms": WAIT_MS})
     assert any("smoke-" in label for label in r["labels"]), r["labels"][:20]

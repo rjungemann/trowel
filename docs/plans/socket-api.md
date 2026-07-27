@@ -143,7 +143,7 @@ All of these act on the **active editor tab**. See
   warning_marker_lines}` — read back out of **Scintilla**, not out of the
   model. Distinguishes "a diagnostic exists" from "a squiggle is painted".
 - `lsp.completions {pos?, timeout_ms?}` → `{labels: [string], count}`.
-  Defaults to the caret. Note the server returns nothing at offset 0.
+  Defaults to the caret.
 - `lsp.hover {pos?, timeout_ms?}` → `{text}`.
 - `lsp.restart` — respawns `tur lsp` and drops stale diagnostics.
 
