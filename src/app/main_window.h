@@ -87,6 +87,7 @@ private slots:
     bool save();
     bool saveAs();
     void restartRepl();
+    void restartReplInDirectory();
     void clearRepl();
     void focusEditor();
     void focusRepl();

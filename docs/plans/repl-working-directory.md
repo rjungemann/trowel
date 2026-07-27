@@ -63,23 +63,40 @@ A blank window shows `~`; a window opened on a file shows that file's
 directory — which is the per-window REPL rule from
 [`multi-window.md`](multi-window.md) made visible.
 
-## B2 — GUI command
+## B2 — GUI command ✅ Done
 
-Two actions in the Run menu, next to the existing **Restart REPL**:
+**Run ▸ Restart REPL In…** opens `QFileDialog::getExistingDirectory`
+starting at the REPL's current directory (falling back to the active
+file's), then restarts there. Per-window, like the REPL itself. The
+label says "Restart" rather than "Set" so the state-clearing is honest —
+"Set REPL Directory…" would imply a live `cd` that is not happening.
 
-- **"Restart REPL in Directory…"** — `QFileDialog::getExistingDirectory`
-  defaulting to the current cwd (falling back to the active file's
-  directory), then `repl_->restart(dir)`.
-- **"Restart REPL in Current File's Directory"** — one-click version of
-  the common case; restarts in the active editor's directory.
+**Only one action, not two.** The plan's second entry, "Restart REPL in
+Current File's Directory", turned out to already exist: `restartRepl()`
+calls `repl_->restart(replWorkingDir())`, which *is* the active file's
+directory. Adding it would have shipped two menu entries doing the same
+thing. Instead the existing **Restart REPL** kept its behavior and got a
+tooltip that says what it does ("Restart the REPL in the current file's
+directory"), which it never advertised.
 
-Both are per-window. Both restart, and the labels say "Restart" rather
-than "Set" or "Change" precisely so the state-clearing is honest — a
-label like "Set REPL Directory…" would imply a live `cd` that isn't
-happening.
+Control commands `repl.get_cwd` → `{cwd, running}` and `repl.set_cwd
+{path}` → `{cwd}` back the smoke tests. `set_cwd` rejects a
+non-directory with `bad_path` and leaves the running REPL untouched.
 
-Also add control commands `repl.set_cwd {path}` and `repl.get_cwd` so
-the smoke suite can drive and assert this.
+### The directory is not sticky
+
+An explicit `set_cwd` lasts until the next plain **Restart REPL**, which
+re-roots to the active file's directory as documented. So the rule stays
+"Restart REPL puts you where the file is", and Restart REPL In… is a
+one-off override rather than a mode.
+
+That is the conservative reading — it introduces no new state and keeps
+the shipped user guide true. The alternative (a sticky per-window
+override that plain Restart REPL preserves) is arguably friendlier for
+someone who deliberately chose a scratch directory and then needs to
+clear a wedged REPL, and it is close to the "persisted override" listed
+under Non-goals. Worth revisiting if the one-off behavior annoys in
+practice.
 
 ## B3 — REPL meta-command
 

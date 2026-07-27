@@ -15,6 +15,7 @@
 #include <QApplication>
 #include <QDragEnterEvent>
 #include <QDropEvent>
+#include <QFileInfo>
 #include <QHash>
 #include <QMimeData>
 #include <QUrl>
@@ -470,6 +471,33 @@ void HandleReplGetCursor(MainWindow* w, const QJsonObject&, const Reply& reply) 
     reply(o, nullptr);
 }
 
+void HandleReplGetCwd(MainWindow* w, const QJsonObject&, const Reply& reply) {
+    ReplSession* r = w->replSession();
+    if (!r) { ReplyErr(reply, "no_repl", "REPL not available"); return; }
+    QJsonObject o;
+    o["cwd"] = r->workingDir();
+    o["running"] = r->isRunning();
+    reply(o, nullptr);
+}
+
+void HandleReplSetCwd(MainWindow* w, const QJsonObject& args, const Reply& reply) {
+    ReplSession* r = w->replSession();
+    if (!r) { ReplyErr(reply, "no_repl", "REPL not available"); return; }
+    const QString path = args.value("path").toString();
+    if (path.isEmpty()) { ReplyErr(reply, "bad_args", "missing `path`"); return; }
+    const QFileInfo info(path);
+    if (!info.exists() || !info.isDir()) {
+        ReplyErr(reply, "bad_path", QString("not a directory: %1").arg(path));
+        return;
+    }
+    // Restarts the REPL: a running process cannot be moved. Callers lose REPL
+    // state, which is why this is spelled "restart" in the UI.
+    r->restart(info.absoluteFilePath());
+    QJsonObject o;
+    o["cwd"] = r->workingDir();
+    reply(o, nullptr);
+}
+
 void HandleReplRestart(MainWindow* w, const QJsonObject&, const Reply& reply) {
     QMetaObject::invokeMethod(w, "restartRepl", Qt::QueuedConnection);
     reply(Ok(), nullptr);
@@ -673,6 +701,8 @@ void Dispatch(WindowManager* windows, QPointer<ControlConnection> conn,
     if (cmd == "repl.get_screen")      { HandleReplGetScreen(w, args, reply); return; }
     if (cmd == "repl.get_cursor")      { HandleReplGetCursor(w, args, reply); return; }
     if (cmd == "repl.restart")         { HandleReplRestart(w, args, reply); return; }
+    if (cmd == "repl.get_cwd")         { HandleReplGetCwd(w, args, reply); return; }
+    if (cmd == "repl.set_cwd")         { HandleReplSetCwd(w, args, reply); return; }
     if (cmd == "repl.is_running")      { HandleReplIsRunning(w, args, reply); return; }
     if (cmd == "run.buffer")           { HandleRunBuffer(w, args, reply); return; }
     if (cmd == "run.selection")        { HandleRunSelection(w, args, reply); return; }

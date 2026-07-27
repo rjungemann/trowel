@@ -140,6 +140,11 @@ and reachable; elsewhere the process exits with its last window.
 - `repl.get_cursor` → `{line, col}` inside the terminal grid.
 - `repl.restart` — Run → Restart REPL.
 - `repl.is_running` → `{running: bool, pid: <int>|null}`.
+- `repl.get_cwd` → `{cwd, running}` — where this window's REPL is rooted.
+- `repl.set_cwd {path}` → `{cwd}` — restart the REPL in `path`. Errors with
+  `bad_path` for anything that is not an existing directory, leaving the
+  running REPL alone. The restart is unavoidable: a live process cannot be
+  moved. See [`repl-working-directory.md`](repl-working-directory.md).
 - `run.buffer` — Run → Run Buffer (same slot as `MainWindow::runBuffer`).
 - `run.selection` — same as `runSelection`.
 
