@@ -104,6 +104,11 @@ def _launch_trowel(tmp_path: Path) -> TrowelProc:
     env["HOME"] = str(home)
     env["XDG_CONFIG_HOME"] = str(home / ".config")
     env["XDG_CACHE_HOME"] = str(home / ".cache")
+    # QSettings isolation. Setting HOME is not enough on macOS, where QSettings
+    # resolves through cfprefsd (keyed by real uid, not $HOME) and would read
+    # the developer's real preferences — restoring their open buffers into a
+    # test that expects an empty one. This pins settings to a per-test INI file.
+    env["TROWEL_SETTINGS_DIR"] = str(home / "settings")
     # Force English so REPL banners are predictable.
     env.setdefault("LC_ALL", "en_US.UTF-8")
 

@@ -189,11 +189,28 @@ dependency on this work and can land before or after.
 
 ## Milestones
 
-1. **Registry + refactor.** Window registry, construction/restore split
-   so a bare `MainWindow` comes up blank, `ControlServer` repointed at
-   the registry. No user-visible change — this is the load-bearing
-   refactor everything else sits on, and it should be provable by the
-   existing smoke suite passing untouched.
+0. **Settings isolation (prerequisite).** ✅ Done. The smoke suite could
+   not sandbox `QSettings` on macOS: it sets `$HOME`, but QSettings
+   resolves through `cfprefsd`, which keys off the real uid. Tests were
+   therefore reading *and rewriting* the developer's real preferences —
+   four tests failed on a clean tree because the restored session leaked
+   in, and every run clobbered the saved buffer list. `TROWEL_SETTINGS_DIR`
+   (honored in `main.cpp`, set by `conftest.py`) pins settings to a
+   per-test INI file. Needed before milestone 1, whose whole claim is
+   "restore behaves identically", and before milestone 5, which changes
+   the settings schema.
+1. **Registry + refactor.** ✅ Done. Window registry, construction/restore
+   split so a bare `MainWindow` comes up blank, `ControlServer` repointed
+   at the registry. No user-visible change — the load-bearing refactor
+   everything else sits on, provable by the existing smoke suite passing
+   untouched (46 passed, 2 skipped, unchanged).
+
+   One deliberate behavior *fix* rode along: the REPL is now started
+   after restore and after command-line files are opened, so it roots at
+   what the window actually shows. Previously it started mid-construction,
+   so `trowel ~/proj/foo.tur` rooted the REPL at the *restored session's*
+   directory (or `$HOME`), never at `foo.tur`'s — contradicting the rule
+   documented above. Verified against both binaries.
 2. **New Window.** File ▸ New Window (`Ctrl/Cmd+Shift+N`). Optionally a
    Window menu listing open windows (macOS convention, cheap).
 3. **Open routing.** Route all three entry points through

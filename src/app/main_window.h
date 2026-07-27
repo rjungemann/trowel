@@ -31,6 +31,18 @@ public:
     bool openPath(const QString& path);
     bool openDirectory(const QString& path);
 
+    // Two-phase startup. The constructor builds UI only and leaves the window
+    // with no buffers and no REPL; callers may then restoreSession() and/or
+    // openPath() before startSession() finalizes things. Splitting it this way
+    // is what lets a *new* window come up blank while the launch path still
+    // restores, and it lets the REPL root at whatever the window actually ends
+    // up holding rather than at whatever it held mid-construction.
+    //
+    // Every window must get a startSession(); WindowManager::newWindow() does
+    // it for you.
+    void restoreSession();
+    void startSession();
+
     EditorView* editorView() const;
     TerminalView* terminalView() const { return terminal_; }
     ReplSession* replSession() const { return repl_; }
@@ -76,7 +88,6 @@ private:
     void updateWindowTitle();
     bool maybeSaveBuffer(int index);
     bool maybeSaveAll();
-    void restoreState();
     void persistState();
     QString replWorkingDir() const;
     void openSettingsDirectory(const QString& relPath);

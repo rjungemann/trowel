@@ -7,14 +7,16 @@ class QLocalServer;
 
 namespace trowel {
 
-class MainWindow;
+class WindowManager;
 
 namespace control {
 
 class ControlServer : public QObject {
     Q_OBJECT
 public:
-    ControlServer(MainWindow* window, QObject* parent = nullptr);
+    // Targets the registry rather than a fixed window: each request resolves
+    // its own target, so the socket keeps working as windows open and close.
+    ControlServer(WindowManager* windows, QObject* parent = nullptr);
     ~ControlServer() override;
 
     // Start listening on `path`. If empty, a default per-pid path is chosen.
@@ -30,7 +32,7 @@ private slots:
 private:
     static QString defaultSocketPath();
 
-    MainWindow* window_;
+    WindowManager* windows_;
     QLocalServer* server_ = nullptr;
     QString socketPath_;
 };

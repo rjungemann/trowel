@@ -1,5 +1,7 @@
 #include "control/control_connection.h"
 
+#include "app/main_window.h"
+#include "app/window_manager.h"
 #include "control/control_handlers.h"
 
 #include <QJsonDocument>
@@ -9,8 +11,9 @@
 
 namespace trowel::control {
 
-ControlConnection::ControlConnection(QLocalSocket* socket, MainWindow* window, QObject* parent)
-    : QObject(parent), socket_(socket), window_(window) {
+ControlConnection::ControlConnection(QLocalSocket* socket, WindowManager* windows,
+                                     QObject* parent)
+    : QObject(parent), socket_(socket), windows_(windows) {
     socket_->setParent(this);
     connect(socket_, &QLocalSocket::readyRead, this, &ControlConnection::onReadyRead);
     connect(socket_, &QLocalSocket::disconnected, this, &ControlConnection::onDisconnected);
@@ -60,7 +63,11 @@ void ControlConnection::processLine(const QByteArray& line) {
         if (error) self->sendError(id, *error);
         else self->sendReply(id, result);
     };
-    Dispatch(window_, self, cmd, args, std::move(reply));
+    // Resolve the target per request rather than binding one at connect time,
+    // so a long-lived connection keeps working as windows open and close.
+    // Dispatch() replies with `no_window` if we come up empty.
+    MainWindow* window = windows_ ? windows_->activeOrNewWindow() : nullptr;
+    Dispatch(window, self, cmd, args, std::move(reply));
 }
 
 void ControlConnection::sendReply(const QJsonValue& id, const QJsonValue& result) {

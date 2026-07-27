@@ -1,6 +1,7 @@
 #include "app/main_window.h"
 #include "app/single_instance.h"
 #include "app/trowel_application.h"
+#include "app/window_manager.h"
 #include "control/control_server.h"
 
 #include <QApplication>
@@ -21,6 +22,19 @@ int main(int argc, char** argv) {
     // Match the installed trowel.desktop so the compositor associates the
     // window with its icon (StartupWMClass=trowel) on Linux desktops.
     QApplication::setDesktopFileName("trowel");
+
+    // Test-only settings isolation. On macOS QSettings resolves through
+    // cfprefsd, which keys off the real uid and ignores $HOME — so a test
+    // harness cannot sandbox settings with environment variables alone, and
+    // would otherwise read (and overwrite) the developer's real preferences.
+    // When TROWEL_SETTINGS_DIR is set we store settings as a plain INI file
+    // rooted there instead. Unset in normal use, so each platform keeps its
+    // native settings backend.
+    const QString settingsDir = qEnvironmentVariable("TROWEL_SETTINGS_DIR");
+    if (!settingsDir.isEmpty()) {
+        QSettings::setDefaultFormat(QSettings::IniFormat);
+        QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsDir);
+    }
 
     QCommandLineParser parser;
     parser.setApplicationDescription("Trowel — a native editor for turmeric");
@@ -67,27 +81,34 @@ int main(int argc, char** argv) {
         return 0;  // handed off to the already-running instance
     }
 
-    trowel::MainWindow window;
+    auto* windows = new trowel::WindowManager(&app);
 
-    // Attach the window so macOS "open document" requests (QEvent::FileOpen,
-    // e.g. from the `trowel` CLI shim or Finder) open as tabs. This also
-    // flushes any requests that arrived during startup, before the window
-    // existed.
-    app.setMainWindow(&window);
+    // The launch window is built in two phases so the session restore and any
+    // command-line files are both in place before startSession() starts the
+    // REPL — that way the REPL roots at whatever this window actually ends up
+    // showing.
+    trowel::MainWindow* window = windows->createWindow();
 
-    if (!files.isEmpty()) {
-        for (const QString& f : files) window.openPath(f);
-    } else if (!app.hadPendingOpens()) {
-        const QString lastFile = QSettings().value("lastFile").toString();
-        if (!lastFile.isEmpty() && QFileInfo::exists(lastFile)) {
-            window.openPath(lastFile);
-        }
+    // Restore the previous session unless this launch is explicitly about
+    // opening documents.
+    if (files.isEmpty() && !app.hadPendingOpens()) {
+        window->restoreSession();
     }
-    window.show();
+
+    for (const QString& f : files) window->openPath(f);
+
+    window->startSession();
+    window->show();
+
+    // Attach the registry so macOS "open document" requests (QEvent::FileOpen,
+    // e.g. from the `trowel` CLI shim or Finder) are routed to a window. This
+    // also flushes any requests that arrived during startup, before the
+    // registry existed.
+    app.setWindowManager(windows);
 
     trowel::control::ControlServer* ctl = nullptr;
     if (explicitCtl) {
-        ctl = new trowel::control::ControlServer(&window, &app);
+        ctl = new trowel::control::ControlServer(windows, &app);
         QString requested = parser.value(ctlPath);
         if (requested.isEmpty()) requested = qEnvironmentVariable("TROWEL_CONTROL_SOCKET");
         if (requested == "1" || requested == "true") requested.clear();
@@ -102,7 +123,7 @@ int main(int argc, char** argv) {
     // so later launches can forward their files here. Best-effort: if listen
     // loses a startup race we simply run as a standalone window.
     if (useSingleInstance) {
-        auto* si = new trowel::control::ControlServer(&window, &app);
+        auto* si = new trowel::control::ControlServer(windows, &app);
         if (si->start(trowel::single_instance::WellKnownSocketPath()).isEmpty()) {
             QTextStream(stderr)
                 << "[trowel] single-instance socket unavailable; "

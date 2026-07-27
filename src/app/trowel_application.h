@@ -5,7 +5,7 @@
 
 namespace trowel {
 
-class MainWindow;
+class WindowManager;
 
 // QApplication subclass that turns macOS "open document" requests into new
 // editor tabs.
@@ -18,17 +18,18 @@ class MainWindow;
 // tabs" behavior for free: the OS routes a second invocation to this process
 // instead of spawning a new one.
 //
-// FileOpen events can arrive before the main window exists (during app
-// construction), so requests received before setMainWindow() are buffered and
-// flushed once the window is attached.
+// FileOpen events can arrive before any window exists (during app
+// construction), so requests received before setWindowManager() are buffered
+// and flushed once the registry is attached. Which window a request lands in
+// is WindowManager::activeOrNewWindow()'s decision, not this class's.
 class TrowelApplication : public QApplication {
     Q_OBJECT
 public:
     TrowelApplication(int& argc, char** argv);
 
-    // Attach the main window. Any file-open requests that arrived before the
-    // window existed are delivered immediately, in order.
-    void setMainWindow(MainWindow* window);
+    // Attach the window registry. Any file-open requests that arrived before
+    // it existed are delivered immediately, in order.
+    void setWindowManager(WindowManager* windows);
 
     // True if at least one FileOpen request arrived before the window was
     // attached, i.e. the app was launched by opening documents.
@@ -40,7 +41,7 @@ protected:
 private:
     void openFile(const QString& path);
 
-    MainWindow* window_ = nullptr;
+    WindowManager* windows_ = nullptr;
     QStringList pending_;
     bool hadPendingOpens_ = false;
 };

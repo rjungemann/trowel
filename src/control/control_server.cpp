@@ -15,8 +15,8 @@
 
 namespace trowel::control {
 
-ControlServer::ControlServer(MainWindow* window, QObject* parent)
-    : QObject(parent), window_(window) {}
+ControlServer::ControlServer(WindowManager* windows, QObject* parent)
+    : QObject(parent), windows_(windows) {}
 
 ControlServer::~ControlServer() { stop(); }
 
@@ -66,7 +66,7 @@ void ControlServer::stop() {
 
 void ControlServer::onNewConnection() {
     while (auto* sock = server_->nextPendingConnection()) {
-        new ControlConnection(sock, window_, this);
+        new ControlConnection(sock, windows_, this);
     }
 }
 

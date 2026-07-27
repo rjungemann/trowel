@@ -41,6 +41,8 @@ add_library(trowel_lib STATIC
     src/app/tab_content.h
     src/app/trowel_application.cpp
     src/app/trowel_application.h
+    src/app/window_manager.cpp
+    src/app/window_manager.h
     src/editor/editor_view.cpp
     src/editor/editor_view.h
     src/editor/lexers.h

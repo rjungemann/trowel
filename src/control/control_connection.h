@@ -8,7 +8,7 @@ class QLocalSocket;
 
 namespace trowel {
 
-class MainWindow;
+class WindowManager;
 
 namespace control {
 
@@ -20,7 +20,7 @@ struct ControlError {
 class ControlConnection : public QObject {
     Q_OBJECT
 public:
-    ControlConnection(QLocalSocket* socket, MainWindow* window, QObject* parent = nullptr);
+    ControlConnection(QLocalSocket* socket, WindowManager* windows, QObject* parent = nullptr);
 
     // Send a completed reply for a queued request id.
     void sendReply(const QJsonValue& id, const QJsonValue& result);
@@ -35,7 +35,7 @@ private:
     void writeFrame(const class QJsonObject& obj);
 
     QLocalSocket* socket_;
-    MainWindow* window_;
+    WindowManager* windows_;
     QByteArray buffer_;
 };
 

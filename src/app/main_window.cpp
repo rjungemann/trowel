@@ -45,13 +45,10 @@ MainWindow::MainWindow(QWidget* parent)
     setupUi();
     setupMenus();
     setupToolBar();
-    restoreState();
-    ensureAtLeastOneBuffer();
+    loadRecentFiles();
     updateEditorActionsEnabled();
     updateWindowTitle();
-
-    repl_ = new ReplSession(terminal_, this);
-    repl_->start(replWorkingDir());
+    // No buffers and no REPL yet — see startSession().
 }
 
 MainWindow::~MainWindow() = default;
@@ -928,7 +925,22 @@ void MainWindow::updateWindowTitle() {
     setWindowModified(v->isModified());
 }
 
-void MainWindow::restoreState() {
+void MainWindow::startSession() {
+    // Guard: a window only ever gets one session. Cheap insurance against a
+    // caller that both restores and calls newWindow()-style setup.
+    if (repl_) return;
+
+    ensureAtLeastOneBuffer();
+    activateBuffer(activeIndex_ < 0 ? 0 : activeIndex_);
+
+    // Started last, so replWorkingDir() sees whatever this window actually
+    // ended up holding — a restored session, a file opened from the CLI, or
+    // nothing at all (a blank window roots the REPL at $HOME).
+    repl_ = new ReplSession(terminal_, this);
+    repl_->start(replWorkingDir());
+}
+
+void MainWindow::restoreSession() {
     QSettings settings;
     if (settings.contains("geometry")) {
         restoreGeometry(settings.value("geometry").toByteArray());
@@ -939,7 +951,6 @@ void MainWindow::restoreState() {
     const bool replVisible = settings.value("replVisible", true).toBool();
     if (terminal_) terminal_->setVisible(replVisible);
     if (toggleReplAction_) toggleReplAction_->setChecked(replVisible);
-    loadRecentFiles();
 
     // Restore open buffers (multi) or fall back to legacy `lastFile`.
     QStringList openPaths = settings.value("openBuffers").toStringList();
