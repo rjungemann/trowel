@@ -92,6 +92,27 @@ Grouped for readability; the wire protocol is flat (`cmd: "editor.type"` etc).
 - `window.focus {pane: "editor"|"terminal"}` — same as `⌘E` / `⌘T`.
 - `window.geometry` → `{x,y,w,h,splitter: <int>}`.
 - `window.set_splitter {pos: <int>}` — drag the splitter to a pixel position.
+- `window.new` → `{count}` — same as File → New Window.
+- `window.drop {paths: [...]}` → `{accepted}` — synthesize a drag/drop of
+  local files onto the window, exercising the real drop handlers.
+- `window.list` → `{count, windows: [{title, active, file_path, tabs,
+  tab_count}]}`.
+
+Targets are resolved per command, so a long-lived connection follows the
+user as windows open and close:
+
+- `ping`, `window.new`, `window.list` are registry-level — they work with
+  zero windows open and never create one to answer.
+- `editor.open` and `window.activate` create a window when none is open
+  (rule (a) in [`multi-window.md`](multi-window.md)).
+- Everything else targets the active window and fails with `no_window`
+  when there isn't one, rather than conjuring a blank window.
+
+`editor.*` commands additionally fail with `no_editor` when the active
+tab is not an editor (a directory browser or the preferences pane).
+
+On macOS the app outlives its windows, so the zero-window state is real
+and reachable; elsewhere the process exits with its last window.
 - `menu.invoke {path: ["Run", "Run Buffer"]}` — resolve a `QAction` by its
   menu path and `trigger()` it. Preferred over duplicating shortcuts.
 

@@ -63,11 +63,9 @@ void ControlConnection::processLine(const QByteArray& line) {
         if (error) self->sendError(id, *error);
         else self->sendReply(id, result);
     };
-    // Resolve the target per request rather than binding one at connect time,
-    // so a long-lived connection keeps working as windows open and close.
-    // Dispatch() replies with `no_window` if we come up empty.
-    MainWindow* window = windows_ ? windows_->activeOrNewWindow() : nullptr;
-    Dispatch(window, self, cmd, args, std::move(reply));
+    // Dispatch picks its own target per command, so a long-lived connection
+    // keeps working as windows open and close.
+    Dispatch(windows_, self, cmd, args, std::move(reply));
 }
 
 void ControlConnection::sendReply(const QJsonValue& id, const QJsonValue& result) {

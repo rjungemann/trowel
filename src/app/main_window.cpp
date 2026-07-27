@@ -5,6 +5,7 @@
 #include "app/preferences_view.h"
 #include "app/tab_bar.h"
 #include "app/tab_content.h"
+#include "app/window_manager.h"
 #include "editor/editor_view.h"
 #include "editor/theme_loader.h"
 #include "repl/repl_session.h"
@@ -12,7 +13,12 @@
 #include "repl/terminal_view.h"
 
 #include <QAction>
+#include <QApplication>
 #include <QCloseEvent>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QMimeData>
+#include <QUrl>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFont>
@@ -60,6 +66,14 @@ EditorView* MainWindow::editorView() const {
     return static_cast<EditorView*>(v);
 }
 
+QStringList MainWindow::tabPaths() const {
+    QStringList paths;
+    for (const auto& b : buffers_) {
+        paths << (b->view ? b->view->filePath() : QString());
+    }
+    return paths;
+}
+
 void MainWindow::setupUi() {
     splitter_ = new QSplitter(Qt::Horizontal, this);
 
@@ -89,6 +103,7 @@ void MainWindow::setupUi() {
 
     setCentralWidget(central);
     resize(1200, 800);
+    setAcceptDrops(true);
 
     statusBar()->hide();
 
@@ -106,6 +121,10 @@ void MainWindow::setupMenus() {
     auto* newAction = fileMenu->addAction("&New");
     newAction->setShortcut(QKeySequence::New);
     connect(newAction, &QAction::triggered, this, &MainWindow::newFile);
+
+    auto* newWindowAction = fileMenu->addAction("New &Window");
+    newWindowAction->setShortcut(QKeySequence("Ctrl+Shift+N"));
+    connect(newWindowAction, &QAction::triggered, this, &MainWindow::newWindow);
 
     auto* openAction = fileMenu->addAction("&Open…");
     openAction->setShortcut(QKeySequence::Open);
@@ -134,11 +153,15 @@ void MainWindow::setupMenus() {
     closeTabAction->setShortcut(QKeySequence("Ctrl+W"));
     connect(closeTabAction, &QAction::triggered, this, &MainWindow::closeCurrentTab);
 
+    auto* closeWindowAction = fileMenu->addAction("Close Win&dow");
+    closeWindowAction->setShortcut(QKeySequence("Ctrl+Shift+W"));
+    connect(closeWindowAction, &QAction::triggered, this, &QMainWindow::close);
+
     fileMenu->addSeparator();
 
     auto* quitAction = fileMenu->addAction("&Quit");
     quitAction->setShortcut(QKeySequence::Quit);
-    connect(quitAction, &QAction::triggered, this, &QMainWindow::close);
+    connect(quitAction, &QAction::triggered, this, &MainWindow::quitApp);
 
     menuBar()->addMenu("&Edit");
 
@@ -154,6 +177,12 @@ void MainWindow::setupMenus() {
     auto* prevTabAction = viewMenu->addAction("&Previous Tab");
     prevTabAction->setShortcut(QKeySequence("Ctrl+Shift+Tab"));
     connect(prevTabAction, &QAction::triggered, this, &MainWindow::prevTab);
+
+    windowMenu_ = menuBar()->addMenu("&Window");
+    // Populated from the registry; also refreshed just before it opens so
+    // window titles are current even if nothing opened or closed.
+    connect(windowMenu_, &QMenu::aboutToShow, this, &MainWindow::rebuildWindowMenu);
+    rebuildWindowMenu();
 
     auto* runMenu = menuBar()->addMenu("&Run");
 
@@ -302,6 +331,25 @@ int MainWindow::nextUntitledIndex() const {
         if (b->untitledIndex > max) max = b->untitledIndex;
     }
     return max + 1;
+}
+
+int MainWindow::indexOfPath(const QString& absPath) const {
+    for (int i = 0; i < static_cast<int>(buffers_.size()); ++i) {
+        TabContent* v = buffers_[i]->view;
+        if (!v || v->kind() != TabContent::Kind::Editor) continue;
+        if (v->filePath().isEmpty()) continue;
+        if (QFileInfo(v->filePath()).absoluteFilePath() == absPath) return i;
+    }
+    return -1;
+}
+
+bool MainWindow::openAny(const QString& path) {
+    return QFileInfo(path).isDir() ? openDirectory(path) : openPath(path);
+}
+
+bool MainWindow::replaceBufferWithPath(int index, const QString& path) {
+    return QFileInfo(path).isDir() ? replaceBufferWithDirectory(index, path)
+                                   : replaceBufferWithFile(index, path);
 }
 
 int MainWindow::indexOfView(TabContent* v) const {
@@ -465,6 +513,16 @@ void MainWindow::ensureAtLeastOneBuffer() {
 }
 
 bool MainWindow::openPath(const QString& path) {
+    // Already open in this window? Focus that tab instead of making a second
+    // one. Deliberately scoped to this window — a file open in *another*
+    // window is left alone rather than yanking the user across windows.
+    const QString abs = QFileInfo(path).absoluteFilePath();
+    if (const int existing = indexOfPath(abs); existing >= 0) {
+        activateBuffer(existing);
+        rememberRecentFile(abs);
+        return true;
+    }
+
     // Reuse current buffer if it's a fresh, empty, unmodified Untitled editor.
     if (activeIndex_ >= 0 && activeIndex_ < static_cast<int>(buffers_.size())) {
         Buffer* cur = buffers_[activeIndex_].get();
@@ -509,20 +567,7 @@ bool MainWindow::openDirectory(const QString& path) {
         if (cur->view && cur->view->kind() == TabContent::Kind::Editor) {
             auto* ev = static_cast<EditorView*>(cur->view);
             if (ev->filePath().isEmpty() && ev->isEmpty() && !ev->isModified()) {
-                // Swap the editor out for a directory view in place.
-                auto* dv = new DirectoryView(editorStack_);
-                editorStack_->addWidget(dv);
-                editorStack_->removeWidget(ev);
-                ev->deleteLater();
-                cur->view = dv;
-                cur->untitledIndex = 0;
-                connectBufferSignals(activeIndex_);
-                dv->setRoot(abs);
-                editorStack_->setCurrentWidget(dv);
-                updateBufferDisplayName(activeIndex_);
-                updateWindowTitle();
-                updateEditorActionsEnabled();
-                return true;
+                return replaceBufferWithDirectory(activeIndex_, abs);
             }
         }
     }
@@ -539,6 +584,35 @@ bool MainWindow::openDirectory(const QString& path) {
     connectBufferSignals(newIndex);
     activateBuffer(newIndex);
     refreshTabBar();
+    return true;
+}
+
+bool MainWindow::replaceBufferWithDirectory(int index, const QString& path) {
+    if (index < 0 || index >= static_cast<int>(buffers_.size())) return false;
+    QFileInfo info(path);
+    if (!info.exists() || !info.isDir()) {
+        QMessageBox::warning(this, "Trowel", QString("Not a directory: %1").arg(path));
+        return false;
+    }
+    Buffer* buf = buffers_[index].get();
+    TabContent* old = buf->view;
+
+    auto* dv = new DirectoryView(editorStack_);
+    editorStack_->addWidget(dv);
+    editorStack_->removeWidget(old);
+    if (old) old->deleteLater();
+
+    buf->view = dv;
+    buf->untitledIndex = 0;
+    connectBufferSignals(index);
+    dv->setRoot(info.absoluteFilePath());
+
+    if (index == activeIndex_) {
+        editorStack_->setCurrentWidget(dv);
+    }
+    updateBufferDisplayName(index);
+    updateWindowTitle();
+    updateEditorActionsEnabled();
     return true;
 }
 
@@ -647,6 +721,68 @@ void MainWindow::pickFont() {
         }
     }
     QSettings().setValue("editorFont", chosen);
+}
+
+void MainWindow::setWindowManager(WindowManager* windows) {
+    windows_ = windows;
+    if (windows_) {
+        connect(windows_, &WindowManager::windowsChanged,
+                this, &MainWindow::rebuildWindowMenu);
+    }
+    rebuildWindowMenu();
+}
+
+void MainWindow::rebuildWindowMenu() {
+    if (!windowMenu_) return;
+    windowMenu_->clear();
+    if (!windows_) return;
+
+    for (MainWindow* w : windows_->windows()) {
+        QAction* action = windowMenu_->addAction(w->windowTitle());
+        action->setCheckable(true);
+        action->setChecked(w == this);
+        // `w` as the context object: if that window goes away, so does the
+        // connection, and the menu is rebuilt anyway.
+        connect(action, &QAction::triggered, w, [w]() {
+            w->show();
+            w->raise();
+            w->activateWindow();
+        });
+    }
+}
+
+void MainWindow::newWindow() {
+    if (!windows_) return;
+    windows_->newWindow();
+}
+
+void MainWindow::quitApp() {
+    // Save the whole window set *before* closing anything: quitting should
+    // restore every window that was open, whereas closing a window one at a
+    // time deliberately drops it from the session.
+    if (windows_) {
+        windows_->persistAll();
+        windows_->setQuitting(true);
+    }
+
+    // Quit means the whole app, not just this window. closeAllWindows() runs
+    // every window's closeEvent, so an unsaved-changes prompt can still cancel
+    // — windows that already closed stay closed, and any that refused keep the
+    // app alive.
+    QApplication::closeAllWindows();
+
+    if (!windows_ || windows_->count() == 0) {
+        // On macOS quitOnLastWindowClosed is disabled (the app is meant to
+        // outlive its windows), so closing them all is not enough to end the
+        // process — ask explicitly.
+        QApplication::quit();
+        return;
+    }
+
+    // Somebody refused to close, so the quit is off. Resync the saved session
+    // to what is actually still open.
+    windows_->setQuitting(false);
+    windows_->persistAll();
 }
 
 void MainWindow::newFile() {
@@ -897,32 +1033,104 @@ QString MainWindow::replWorkingDir() const {
     return QDir::homePath();
 }
 
+namespace {
+
+// Local-file paths carried by a drag, in order. Non-file URLs (http://, and
+// so on) are ignored rather than opened.
+QStringList DroppedPaths(const QMimeData* mime) {
+    QStringList paths;
+    if (!mime || !mime->hasUrls()) return paths;
+    for (const QUrl& url : mime->urls()) {
+        if (!url.isLocalFile()) continue;
+        const QString local = url.toLocalFile();
+        if (!local.isEmpty()) paths << local;
+    }
+    return paths;
+}
+
+}  // namespace
+
+void MainWindow::dragEnterEvent(QDragEnterEvent* event) {
+    // Only claim the drag if it actually carries local files; leaving it
+    // unaccepted otherwise lets the drop fall through to whatever else wants it.
+    if (DroppedPaths(event->mimeData()).isEmpty()) return;
+    event->acceptProposedAction();
+}
+
+void MainWindow::dropEvent(QDropEvent* event) {
+    const QStringList paths = DroppedPaths(event->mimeData());
+    if (paths.isEmpty()) return;
+    event->acceptProposedAction();
+    openDropped(paths);
+    raise();
+    activateWindow();
+}
+
+bool MainWindow::openDropped(const QStringList& paths) {
+    if (paths.isEmpty()) return false;
+
+    const QString first = QFileInfo(paths.first()).absoluteFilePath();
+    bool ok = true;
+
+    // A drop replaces the current tab — but not when there is no tab to
+    // replace, and not when the file is already open in this window, where the
+    // focus-existing-tab rule wins (replacing would leave two tabs on one file).
+    if (buffers_.empty() || activeIndex_ < 0 || indexOfPath(first) >= 0) {
+        ok = openAny(first);
+    } else {
+        // Replacing discards whatever the tab held, so offer to save first.
+        if (!maybeSaveBuffer(activeIndex_)) return false;
+        ok = replaceBufferWithPath(activeIndex_, first);
+    }
+
+    // Anything else in the same drop opens as an additional tab.
+    for (int i = 1; i < paths.size(); ++i) {
+        ok = openAny(paths[i]) && ok;
+    }
+    return ok;
+}
+
 void MainWindow::closeEvent(QCloseEvent* event) {
     if (!maybeSaveAll()) {
         event->ignore();
         return;
     }
     if (repl_) repl_->stop();
-    persistState();
+    persistGlobals();
+    // Leave the registry before the deferred delete: WA_DeleteOnClose runs on
+    // the next event-loop pass, so anything checking count() in between (a
+    // quit, or the "was that the last window?" decision) must not still see us.
+    if (windows_) {
+        windows_->forget(this);
+        // Closing a window drops it from the saved session, so rewrite what
+        // survives. During a quit we skip this: quitApp() already snapshotted
+        // the full set, and rewriting per close would erase it window by
+        // window until nothing was left to restore.
+        if (!windows_->isQuitting()) windows_->persistAll();
+    }
     event->accept();
 }
 
 void MainWindow::updateWindowTitle() {
-    if (activeIndex_ < 0 || activeIndex_ >= static_cast<int>(buffers_.size())) {
-        setWindowTitle("Trowel");
-        return;
+    const bool haveBuffer =
+        activeIndex_ >= 0 && activeIndex_ < static_cast<int>(buffers_.size());
+    TabContent* v = haveBuffer ? buffers_[activeIndex_]->view : nullptr;
+
+    QString title = QStringLiteral("Trowel");
+    if (v) {
+        const QString name = buffers_[activeIndex_]->displayName;
+        const QString marker = v->isModified() ? " •" : "";
+        title = QString("%1%2 — Trowel").arg(name, marker);
+        setWindowFilePath(v->kind() == TabContent::Kind::Editor ? v->filePath() : QString());
+        setWindowModified(v->isModified());
     }
-    TabContent* v = buffers_[activeIndex_]->view;
-    if (!v) {
-        setWindowTitle("Trowel");
-        return;
-    }
-    const QString path = v->filePath();
-    const QString name = buffers_[activeIndex_]->displayName;
-    const QString marker = v->isModified() ? " •" : "";
-    setWindowTitle(QString("%1%2 — Trowel").arg(name, marker));
-    setWindowFilePath(v->kind() == TabContent::Kind::Editor ? path : QString());
-    setWindowModified(v->isModified());
+    if (windowTitle() == title) return;
+
+    setWindowTitle(title);
+    // Every window's Window menu lists these titles, so a change has to reach
+    // the other windows' menus too — otherwise they keep showing the "Trowel"
+    // a window was called before it had loaded anything.
+    if (windows_) windows_->notifyWindowsChanged();
 }
 
 void MainWindow::startSession() {
@@ -940,26 +1148,19 @@ void MainWindow::startSession() {
     repl_->start(replWorkingDir());
 }
 
-void MainWindow::restoreSession() {
-    QSettings settings;
-    if (settings.contains("geometry")) {
-        restoreGeometry(settings.value("geometry").toByteArray());
+void MainWindow::applySessionState(const QVariantMap& state) {
+    if (state.contains("geometry")) {
+        restoreGeometry(state.value("geometry").toByteArray());
     }
-    if (settings.contains("splitterState")) {
-        splitter_->restoreState(settings.value("splitterState").toByteArray());
+    if (state.contains("splitterState")) {
+        splitter_->restoreState(state.value("splitterState").toByteArray());
     }
-    const bool replVisible = settings.value("replVisible", true).toBool();
+    const bool replVisible = state.value("replVisible", true).toBool();
     if (terminal_) terminal_->setVisible(replVisible);
     if (toggleReplAction_) toggleReplAction_->setChecked(replVisible);
 
-    // Restore open buffers (multi) or fall back to legacy `lastFile`.
-    QStringList openPaths = settings.value("openBuffers").toStringList();
-    if (openPaths.isEmpty() && settings.contains("lastFile")) {
-        const QString legacy = settings.value("lastFile").toString();
-        if (!legacy.isEmpty()) openPaths << legacy;
-        settings.remove("lastFile");
-    }
-    int desiredActive = settings.value("activeBuffer", 0).toInt();
+    const QStringList openPaths = state.value("openBuffers").toStringList();
+    int desiredActive = state.value("activeBuffer", 0).toInt();
 
     static const QString kDirPrefix = QStringLiteral("dir://");
     for (const QString& entry : openPaths) {
@@ -986,17 +1187,11 @@ void MainWindow::restoreSession() {
     refreshTabBar();
 }
 
-void MainWindow::persistState() {
-    QSettings settings;
-    settings.setValue("geometry", saveGeometry());
-    settings.setValue("splitterState", splitter_->saveState());
-    if (toggleReplAction_) {
-        settings.setValue("replVisible", toggleReplAction_->isChecked());
-    }
-    if (EditorView* v = editorView()) {
-        settings.setValue("editorFont", v->currentFont());
-    }
-    settings.setValue("recentFiles", recentFiles_);
+QVariantMap MainWindow::sessionState() const {
+    QVariantMap state;
+    state["geometry"] = saveGeometry();
+    state["splitterState"] = splitter_->saveState();
+    state["replVisible"] = toggleReplAction_ ? toggleReplAction_->isChecked() : true;
 
     QStringList openPaths;
     int activeInList = -1;
@@ -1004,7 +1199,7 @@ void MainWindow::persistState() {
         TabContent* v = buffers_[i]->view;
         if (!v) continue;
         const QString path = v->filePath();
-        if (path.isEmpty()) continue;
+        if (path.isEmpty()) continue;  // Untitled buffers have nothing to point at
         if (i == activeIndex_) activeInList = openPaths.size();
         if (v->kind() == TabContent::Kind::Directory) {
             openPaths << (QStringLiteral("dir://") + path);
@@ -1012,9 +1207,25 @@ void MainWindow::persistState() {
             openPaths << path;
         }
     }
-    settings.setValue("openBuffers", openPaths);
-    settings.setValue("activeBuffer", activeInList < 0 ? 0 : activeInList);
-    settings.remove("lastFile");
+    state["openBuffers"] = openPaths;
+    state["activeBuffer"] = activeInList < 0 ? 0 : activeInList;
+    return state;
+}
+
+void MainWindow::persistGlobals() {
+    QSettings settings;
+    if (EditorView* v = editorView()) {
+        settings.setValue("editorFont", v->currentFont());
+    }
+    // Merge rather than overwrite. Each window carries its own recent-files
+    // list, so a plain write would let whichever window closed last throw away
+    // everything the others had opened. This window's entries stay in front.
+    QStringList merged = recentFiles_;
+    for (const QString& path : settings.value("recentFiles").toStringList()) {
+        if (!merged.contains(path)) merged << path;
+    }
+    while (merged.size() > 8) merged.removeLast();
+    settings.setValue("recentFiles", merged);
 }
 
 }

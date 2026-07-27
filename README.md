@@ -41,6 +41,13 @@ there is nothing else to install. To add a menu entry and register `.tur` /
 `.sweet` files, integrate it with a tool like
 [Gear Lever](https://github.com/mijorus/gearlever) or AppImageLauncher.
 
+## Using Trowel
+
+- [Windows, tabs & the REPL](docs/guides/windows-tabs-and-repl.md) — where a
+  file opens, what drag-and-drop does, session restore, and where each
+  window's REPL is rooted.
+- [Keyboard shortcuts](docs/guides/keyboard-shortcuts.md)
+
 ## Build from source
 
 ### macOS

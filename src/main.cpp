@@ -23,6 +23,16 @@ int main(int argc, char** argv) {
     // window with its icon (StartupWMClass=trowel) on Linux desktops.
     QApplication::setDesktopFileName("trowel");
 
+#ifdef Q_OS_MACOS
+    // macOS apps outlive their windows: closing the last one leaves the app in
+    // the dock, and reopening it (dock click, or a document from Finder) makes
+    // a fresh window. This is what makes the "no window open → open in a new
+    // window" rule reachable at all. Other platforms keep quitting on last
+    // close, which preserves the single-instance socket's assumption that a
+    // live process means an available window.
+    QApplication::setQuitOnLastWindowClosed(false);
+#endif
+
     // Test-only settings isolation. On macOS QSettings resolves through
     // cfprefsd, which keys off the real uid and ignores $HOME — so a test
     // harness cannot sandbox settings with environment variables alone, and
@@ -83,22 +93,25 @@ int main(int argc, char** argv) {
 
     auto* windows = new trowel::WindowManager(&app);
 
-    // The launch window is built in two phases so the session restore and any
-    // command-line files are both in place before startSession() starts the
-    // REPL — that way the REPL roots at whatever this window actually ends up
-    // showing.
-    trowel::MainWindow* window = windows->createWindow();
-
-    // Restore the previous session unless this launch is explicitly about
-    // opening documents.
+    // Restore the previous session — every window it had — unless this launch
+    // is explicitly about opening documents.
+    trowel::MainWindow* window = nullptr;
     if (files.isEmpty() && !app.hadPendingOpens()) {
-        window->restoreSession();
+        window = windows->restoreAll();
     }
 
-    for (const QString& f : files) window->openPath(f);
-
-    window->startSession();
-    window->show();
+    // Nothing restored (fresh install, or a launch carrying files): one window,
+    // built in two phases so any command-line files are in place before
+    // startSession() starts the REPL, which then roots at what the window
+    // actually shows.
+    if (!window) {
+        window = windows->createWindow();
+        for (const QString& f : files) window->openPath(f);
+        window->startSession();
+        window->show();
+    } else {
+        for (const QString& f : files) window->openPath(f);
+    }
 
     // Attach the registry so macOS "open document" requests (QEvent::FileOpen,
     // e.g. from the `trowel` CLI shim or Finder) are routed to a window. This

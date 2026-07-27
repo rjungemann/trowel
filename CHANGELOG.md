@@ -6,6 +6,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 <!-- New releases are inserted immediately below this comment. -->
 
+## [Unreleased]
+
+### Added
+- **Multiple windows** -- Trowel can now open more than one window. **File > New Window** (`Ctrl/Cmd+Shift+N`) opens an empty one, **Close Window** (`Ctrl/Cmd+Shift+W`) closes it, and the new **Window** menu lists everything open. Each window has its own tabs and its own REPL. See [Windows, tabs & the REPL](docs/guides/windows-tabs-and-repl.md).
+- **Open-in-window rules** -- opening a file with no window open creates one; with a window open it becomes a tab in that window; opening a file that is already open focuses its existing tab instead of duplicating it. This applies to the File menu, the `trowel` command line, Finder, and single-instance forwarding alike.
+- **Drag and drop** -- dropping a file onto a window replaces the current tab (prompting first if it has unsaved changes), or fills the tab when the window is empty. Dropping several files replaces the current tab with the first and opens the rest as tabs; dropping a directory opens the directory browser.
+- **Per-window session restore** -- quitting now remembers every open window (tabs, active tab, geometry, REPL visibility) and restores them all on the next launch. Closing a window removes it from the saved session. Existing single-window sessions migrate automatically.
+- **macOS app lifecycle** -- closing the last window leaves Trowel running in the dock, as Mac apps normally do; a dock click or an opened document brings a window back. Linux and Windows continue to exit with the last window.
+
+### Fixed
+- **Crash on editor commands with a non-editor tab** -- driving the control socket (`editor.get_text`, `editor.type`, and friends) while a directory browser or the preferences pane was the active tab dereferenced a null editor and killed the app. These commands now return a `no_editor` error.
+- **REPL working directory on launch** -- starting Trowel with a file (`trowel foo.tur`, or opening a document from Finder) now roots that window's REPL in the file's directory. It previously rooted at the restored session's directory, or the home directory, ignoring the file being opened.
+- **Recent files lost with several windows open** -- each window kept its own recent-files list and the last window to close overwrote the others'. The lists are now merged.
+
 ## [0.0.10] -- 2026-07-24
 
 ### Changed

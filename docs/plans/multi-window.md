@@ -153,6 +153,14 @@ windows/<n>/replVisible
 focusedWindow                # index into the array
 ```
 
+Written with `QSettings::beginWriteArray`, which lands in the INI as a
+`[windows]` section keyed `<1-based index>\<key>`. The array is cleared
+before each write — `beginWriteArray` only truncates, so a shrinking
+window set would otherwise leave a stale trailing entry.
+
+`recentFiles` and `editorFont` stay top-level: they are app-wide, not
+per-window.
+
 Migration: when `windows` is absent, synthesize a single entry from the
 existing top-level keys (which themselves already migrate the older
 `lastFile`), then drop them.
@@ -211,25 +219,137 @@ dependency on this work and can land before or after.
    so `trowel ~/proj/foo.tur` rooted the REPL at the *restored session's*
    directory (or `$HOME`), never at `foo.tur`'s — contradicting the rule
    documented above. Verified against both binaries.
-2. **New Window.** File ▸ New Window (`Ctrl/Cmd+Shift+N`). Optionally a
-   Window menu listing open windows (macOS convention, cheap).
-3. **Open routing.** Route all three entry points through
-   `activeOrNewWindow()`, delivering (a) and (b). Add the
-   focus-existing-tab rule to `openPath()`.
-4. **Drag and drop.** Accept drops, add the save guard, deliver (d).
-5. **Persistence + lifecycle.** Per-window settings array with
-   migration; `setQuitOnLastWindowClosed(false)` on macOS.
-6. **Tests.** `window.new` and `window.list` control commands; smoke
-   coverage for multi-window routing; update the single-instance
-   forwarding test for the route-or-create path.
-7. **Documentation.** A user-facing "Windows, tabs & the REPL" guide
-   under `docs/guides/`, linked from the README, plus a CHANGELOG entry.
-   It should state behavior as rules a user can predict, not
-   implementation: the four open behaviors (flagging the drop
-   divergence), the tab/window key map, focus-existing-tab, session
-   restore, and the REPL cwd rule above — including that Restart REPL
-   re-roots. That last one is "obvious once explained", which is exactly
-   what earns a doc line.
+2. **New Window.** ✅ Done. File ▸ New Window (`Ctrl/Cmd+Shift+N`) and
+   File ▸ Close Window (`Ctrl/Cmd+Shift+W`). Quit now goes through
+   `closeAllWindows()` rather than closing one window, so it means the
+   app and still honors a per-window unsaved-changes cancel.
+
+   The `window.new` / `window.list` control commands were pulled forward
+   from milestone 6, since without them the milestone could not be
+   tested; `tests/smoke/test_multi_window.py` covers it. The Window menu
+   landed in milestone 6.
+
+   ~~**Interim wart:** every window's `closeEvent` writes the same
+   singular settings keys, so with two windows open the last one closed
+   wins and the next launch restores only that one.~~ Fixed in
+   milestone 5.
+3. **Open routing.** ✅ Done. All three entry points were already routed
+   in milestone 1, so this milestone was the rest of the rule set:
+   focus-existing-tab in `openPath()`, and the macOS lifecycle needed to
+   make (a) reachable at all — `setQuitOnLastWindowClosed(false)` plus a
+   `QEvent::ApplicationActivate` handler so a dock click on a windowless
+   app gets a window back. Both pulled forward from milestone 5.
+
+   Two consequences that needed handling:
+
+   - **Quit stopped quitting.** With the last-window rule disabled,
+     `closeAllWindows()` no longer ends the process, so Quit routes
+     through `MainWindow::quitApp()`, which closes every window and then
+     asks explicitly — but only if all of them actually agreed to go, so
+     an unsaved-changes cancel still aborts the quit.
+   - **`Dispatch()` now takes the registry, not a window,** and picks a
+     target per command. Previously every request resolved through
+     `activeOrNewWindow()`, which meant asking "how many windows are
+     open?" *created* one, and a query like `editor.get_text` would
+     silently conjure a blank window to answer. Now opening a document
+     creates a window (that *is* rule (a)); everything else reports
+     `no_window`. Registry-level commands (`ping`, `window.new`,
+     `window.list`) resolve no window at all.
+
+   `window.list` also reports `tabs` / `tab_count`, without which the
+   focus-existing-tab rule is not observable — activating a duplicate
+   tab and focusing the existing one look identical from `editor.get_text`.
+4. **Drag and drop.** ✅ Done. `setAcceptDrops(true)` plus
+   `dragEnterEvent`/`dropEvent` on `MainWindow`; the logic lives in
+   `openDropped()` so it is testable independently. The save guard is in
+   place — replacing a modified tab prompts first, and a cancel aborts
+   the drop.
+
+   Two rules compose here in a way the plan did not spell out: a drop of
+   a file **already open in that window** focuses its tab rather than
+   replacing the current one, because replacing would leave two tabs on
+   one file. Replace still applies for anything not already open.
+
+   `replaceBufferWithDirectory()` was factored out so a dropped directory
+   swaps the tab to a `DirectoryView`; `openDirectory()`'s duplicated
+   in-place swap now calls it.
+
+   The `window.drop` control command synthesizes a real drag/drop against
+   the window, so the smoke tests exercise the actual event handlers
+   rather than just `openDropped()`.
+
+   **Crash fixed along the way.** Reaching a directory tab and then
+   running any `editor.*` command killed the process:
+   `MainWindow::editorView()` is null for a non-editor tab and the
+   control handlers dereferenced it unguarded. Pre-existing (Open
+   Directory reaches the same state), but drag-and-drop makes it far
+   easier to hit. Added `RequireEditor()`, which replies `no_editor`;
+   all 15 affected commands now error cleanly.
+5. **Persistence + lifecycle.** ✅ Done. The lifecycle half landed early
+   in milestone 3, so this was the per-window settings array:
+   `MainWindow::sessionState()` / `applySessionState()` for one window's
+   slice, `WindowManager::persistAll()` / `restoreAll()` for the array,
+   and migration from the legacy singular keys (including `lastFile`),
+   which are removed once the array is authoritative.
+
+   **Close and quit need opposite persistence.** Closing a window drops
+   it from the saved session; quitting must keep every window that was
+   open. But quit *is* a series of closes, so the naive version erases
+   the session window by window until nothing is left to restore.
+   `quitApp()` therefore snapshots the full set up front and sets a
+   `quitting` flag that suppresses the per-close rewrite; if a window
+   refuses to close, the flag clears and the set is resynced to what
+   actually survived.
+
+   **Recent files had to become a merge.** Each window carries its own
+   `recentFiles_`, so the plain last-writer-wins write let whichever
+   window closed last discard everything the other windows had opened —
+   observed directly in the written INI. `persistGlobals()` now merges
+   against what is already stored.
+6. **Tests + Window menu.** ✅ Done. The control commands and most smoke
+   coverage were pulled forward into milestones 2–5, so this milestone
+   was the Window menu deferred from milestone 2, plus the
+   single-instance test update.
+
+   The **Window menu** lists every open window, checkmarks the current
+   one, and switches on click. It relists on `WindowManager::
+   windowsChanged`, which fires when a window opens or closes **and when
+   a title changes** — the latter turned out to be load-bearing: a window
+   is titled "Trowel" at construction and only becomes "foo.tur —
+   Trowel" once a file loads, so without the title notification every
+   menu kept the stale placeholder. `aboutToShow` alone was not enough,
+   since it only fires for a human opening the menu, not for
+   `menu.invoke`.
+
+   The **single-instance tests** now assert the route half of the rule:
+   forwarded files land as tabs in the window that is already open
+   (`window.list` stays at 1), and forwarding an already-open file
+   focuses its tab instead of adding one. These are Linux-only and skip
+   on macOS, so they are **unverified on the development machine** — the
+   routing they exercise (`editor.open` → `activeOrNewWindow()`) is
+   covered on macOS by `test_multi_window.py`, but the forwarding path
+   itself needs a Linux run or CI.
+7. **Documentation.** ✅ Done.
+   [`docs/guides/windows-tabs-and-repl.md`](../guides/windows-tabs-and-repl.md)
+   states the behavior as rules rather than implementation: where a file
+   opens (including the deliberate drag-and-drop divergence from VS
+   Code), the tab/window key map, focus-existing-tab, session restore,
+   the macOS lifecycle, and the REPL cwd rule — including that Restart
+   REPL re-roots and clears state.
+
+   Linked from the README under a new "Using Trowel" section (there was
+   no home for user-facing guides before), and `keyboard-shortcuts.md`
+   picked up the new bindings, which it was missing. CHANGELOG gained an
+   `Unreleased` section covering milestones 1–6, including the three
+   bugs fixed along the way.
+
+   The guide's claims were checked against a running build rather than
+   written from the code: Untitled buffers are not restored, launching
+   with a file skips restore, File ▸ New adds rather than replaces. The
+   one claim not driven end-to-end is per-window REPL-pane visibility —
+   the toggle is a toolbar action with no menu path, so `menu.invoke`
+   cannot reach it; the key is confirmed present per window in the
+   written INI.
 
 ## Corner cases
 

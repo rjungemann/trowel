@@ -9,7 +9,7 @@
 
 namespace trowel {
 
-class MainWindow;
+class WindowManager;
 
 namespace control {
 
@@ -23,7 +23,11 @@ using Reply = std::function<void(const QJsonValue& result,
 
 // Dispatch a command. The handler must guarantee `reply` is called exactly
 // once. `conn` is a QPointer so async handlers can check for disconnection.
-void Dispatch(MainWindow* window,
+//
+// Takes the registry rather than a window so it can pick a target per command:
+// opening a document creates a window when none is open (requirement (a)),
+// while queries report `no_window` instead of silently conjuring one to answer.
+void Dispatch(WindowManager* windows,
               QPointer<ControlConnection> conn,
               const QString& cmd,
               const QJsonObject& args,
