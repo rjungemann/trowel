@@ -41,24 +41,27 @@ Two pieces of existing machinery make this cheap:
   So there is precedent — and a parser — for the REPL reporting state to
   the editor out-of-band.
 
-## B1 — CWD indicator
+## B1 — CWD indicator ✅ Done
 
-Do this first; it is the cheapest piece and useful on its own.
-
-- Add `ReplSession::workingDir()` exposing the existing
-  `lastWorkingDir_`, so the indicator and both commands below share one
-  source of truth.
-- On every start and restart, emit a banner line via
-  `TerminalView::showBanner()`:
+- `ReplSession::workingDir()` exposes the existing `lastWorkingDir_`, so
+  the indicator and the commands below share one source of truth.
+- The startup banner now names the directory, with `$HOME` abbreviated
+  to `~` the way a shell prompt would:
 
   ```
-  ▸ cwd: ~/projects/foo
+  [trowel] tur repl started in ~/projects/foo
   ```
 
-  Abbreviate `$HOME` to `~`. Style it like existing banner output so it
-  reads as editor chrome, not REPL output.
+**Deviation from the plan:** rather than adding a separate `▸ cwd:` line,
+this extends the banner `ReplSession::onStarted()` already emitted. One
+line instead of two, and it matches the surrounding `[trowel] …` house
+style (`restarting REPL…`, `repl exited with code …`) instead of
+introducing a second visual idiom. `restart()` routes through
+`onStarted()`, so re-rooting reports itself for free.
 
-Ships standalone, no dependencies.
+A blank window shows `~`; a window opened on a file shows that file's
+directory — which is the per-window REPL rule from
+[`multi-window.md`](multi-window.md) made visible.
 
 ## B2 — GUI command
 
