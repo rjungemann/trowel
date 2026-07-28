@@ -60,7 +60,17 @@ MainWindow::MainWindow(QWidget* parent)
     // No buffers and no REPL yet — see startSession().
 }
 
-MainWindow::~MainWindow() = default;
+MainWindow::~MainWindow() {
+    // QWidget's base-class teardown (not this destructor body) is what
+    // deletes the child editor widgets, and it runs *after* buffers_ (a
+    // member) is already gone. Destroying an EditorView fires
+    // LspManager::closeDocument() -> diagnosticsUpdated, and that's still
+    // connected to `this` — Qt only severs a QObject's connections in
+    // ~QObject, later still. Without this, the connected lambda calls
+    // editorView(), which indexes the already-destroyed buffers_. Cut that
+    // connection now, before any of that teardown starts.
+    disconnect(LspManager::instance(), nullptr, this, nullptr);
+}
 
 EditorView* MainWindow::editorView() const {
     if (activeIndex_ < 0 || activeIndex_ >= static_cast<int>(buffers_.size())) return nullptr;
