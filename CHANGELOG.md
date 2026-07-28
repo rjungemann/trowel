@@ -6,9 +6,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 <!-- New releases are inserted immediately below this comment. -->
 
-## [Unreleased]
+## [0.1.0] -- 2026-07-27
 
 ### Added
+- **Language intelligence** -- Trowel now speaks LSP to the bundled `tur` language server: inline diagnostics (squiggles plus gutter markers), completion, and hover. Analysis is debounced as you type, and a file open in two windows shares one document with the server.
+- **Multi-language syntax highlighting** -- Turmeric, C, JSON, Markdown, and Justfiles each get a real scanner, replacing the single Turmeric-only lexer. Themes were reworked to match.
 - **Multiple windows** -- Trowel can now open more than one window. **File > New Window** (`Ctrl/Cmd+Shift+N`) opens an empty one, **Close Window** (`Ctrl/Cmd+Shift+W`) closes it, and the new **Window** menu lists everything open. Each window has its own tabs and its own REPL. See [Windows, tabs & the REPL](docs/guides/windows-tabs-and-repl.md).
 - **Open-in-window rules** -- opening a file with no window open creates one; with a window open it becomes a tab in that window; opening a file that is already open focuses its existing tab instead of duplicating it. This applies to the File menu, the `trowel` command line, Finder, and single-instance forwarding alike.
 - **Drag and drop** -- dropping a file onto a window replaces the current tab (prompting first if it has unsaved changes), or fills the tab when the window is empty. Dropping several files replaces the current tab with the first and opens the rest as tabs; dropping a directory opens the directory browser.
@@ -16,10 +18,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **macOS app lifecycle** -- closing the last window leaves Trowel running in the dock, as Mac apps normally do; a dock click or an opened document brings a window back. Linux and Windows continue to exit with the last window.
 - **REPL working-directory indicator** -- the REPL's startup banner now names the directory it is rooted in (`[trowel] tur repl started in ~/projects/foo`, with `$HOME` shown as `~`), so the working directory is visible rather than something you infer. Restarting the REPL reports the new directory too.
 - **Run > Restart REPL In…** -- pick any directory and restart this window's REPL there. A running process cannot be moved between directories, so changing it necessarily restarts the REPL (clearing its state) -- which is why the menu entry says "Restart". The chosen directory holds until the next plain **Restart REPL**, which returns to the current file's directory.
-
 - **Follows the REPL's own `:cd`** -- when the REPL reports a working-directory change (OSC 7, emitted by `tur repl`'s `:cd`), Trowel updates what it reports so the two stay in agreement. Unlike the menu commands this needs no restart, so REPL state survives. Inert with a `tur` that does not emit it.
 
 ### Changed
+- **Bundled Turmeric v0.32.2** -- updated the embedded `tur` compiler/REPL from v0.30.8. Brings `positionEncoding` negotiation, `textDocument/formatting`, signature help, completion in an unbalanced buffer, and language-server support for untitled documents.
 - **Restart REPL tooltip** -- now states what it has always done: restarts the REPL in the current file's directory.
 
 ### Fixed
