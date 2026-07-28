@@ -6,6 +6,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 <!-- New releases are inserted immediately below this comment. -->
 
+## [0.1.1] -- 2026-07-27
+
+### Fixed
+- **Crash when closing a window** -- tearing down a window destroyed its editor views after the buffer list was already gone, and the still-live `LspManager::diagnosticsUpdated` connection then read freed memory. The connection is now severed before teardown begins.
+
 ## [0.1.0] -- 2026-07-27
 
 ### Added

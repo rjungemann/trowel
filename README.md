@@ -5,7 +5,7 @@ programming language, for macOS and Linux.
 
 <img src="docs/images/screenshot.png" alt="Trowel editing a Turmeric source file" width="400">
 
-**Latest release:** `v0.1.0` — multiple windows, language intelligence (diagnostics, completion, hover) from the bundled `tur` language server, and multi-language syntax highlighting.
+**Latest release:** `v0.1.1` — fixes a crash when closing a window.
 
 ## Install
 
