@@ -36,6 +36,25 @@ JUST_DEFAULT, JUST_COMMENT, JUST_RECIPE, JUST_DEP, JUST_PARAM = 91, 92, 93, 94, 
 JUST_ASSIGN, JUST_INTERP, JUST_BACKTICK, JUST_KEYWORD = 96, 97, 98, 99
 JUST_STRING, JUST_NUMBER, JUST_BODY, JUST_ATTR, JUST_OP = 100, 101, 102, 103, 104
 
+CM_DEFAULT, CM_COMMENT, CM_COMMAND, CM_KEYWORD, CM_VARIABLE = 112, 113, 114, 115, 116
+CM_STRING, CM_ESCAPE, CM_NUMBER, CM_OPERATOR, CM_IDENT = 117, 118, 119, 120, 121
+CM_BAND = range(112, 122)
+
+TOML_DEFAULT, TOML_COMMENT, TOML_TABLE, TOML_KEY = 128, 129, 130, 131
+TOML_STRING, TOML_ESCAPE, TOML_NUMBER = 132, 133, 134
+TOML_BOOLEAN, TOML_DATETIME, TOML_OPERATOR, TOML_ERROR = 135, 136, 137, 138
+TOML_BAND = range(128, 139)
+
+SH_DEFAULT, SH_COMMENT, SH_KEYWORD, SH_BUILTIN, SH_FUNCTION = 144, 145, 146, 147, 148
+SH_STRING, SH_ESCAPE, SH_VARIABLE, SH_NUMBER = 149, 150, 151, 152
+SH_OPERATOR, SH_BACKTICK, SH_IDENT = 153, 154, 155
+SH_BAND = range(144, 156)
+
+PY_DEFAULT, PY_COMMENT, PY_KEYWORD, PY_BUILTIN, PY_DECORATOR = 160, 161, 162, 163, 164
+PY_CLASSNAME, PY_FUNCNAME, PY_STRING, PY_ESCAPE = 165, 166, 167, 168
+PY_TRIPLE, PY_NUMBER, PY_OPERATOR, PY_IDENT = 169, 170, 171, 172
+PY_BAND = range(160, 173)
+
 
 # --- helpers ----------------------------------------------------------------
 
@@ -316,6 +335,193 @@ def test_lang_line_in_a_markdown_file_is_not_a_directive(trowel, tmp_path):
     # hash — so this asserts the Markdown band rather than a specific style.)
     doc = lang_doc(trowel, tmp_path, "j.md", "#lang turmeric/sweet\n")
     assert doc.style_of("#lang turmeric/sweet") in MD_BAND
+
+
+# --- shebang / #lang interaction --------------------------------------------
+#
+# reader.c accepts a Racket-style shebang only at byte 0, and only when the
+# `#!` is followed by `/`, a blank, or end of line. It runs to end of line and
+# nothing more, so `#lang` on the next line is still in the leading position.
+# Trowel's styling has to agree with that, or the colors would contradict the
+# reader Trowel itself picked.
+
+
+def test_shebang_is_styled_as_a_comment(trowel, tmp_path):
+    doc = lang_doc(trowel, tmp_path, "sb.tur", "#!/usr/bin/env tur\n(def x 1)\n")
+    assert doc.style_of("#!/usr/bin/env tur") == 1  # TurStyle::LineComment
+
+
+def test_shebang_does_not_swallow_the_next_line(trowel, tmp_path):
+    # The shebang stops at its own newline: the code below it is still code.
+    doc = lang_doc(trowel, tmp_path, "sb2.tur", "#!/usr/bin/env tur\n(def x 1)\n")
+    assert doc.style_of("def x") == TUR_DEFINE
+
+
+def test_lang_after_shebang_is_styled_as_a_directive(trowel, tmp_path):
+    body = "#!/usr/bin/env tur\n#lang turmeric/sweet\ndef x $ + 1 2\n"
+    doc = lang_doc(trowel, tmp_path, "sb3.tur", body)
+    assert doc.style_of("#lang") == 22  # TurStyle::LangDir
+    # ...and it still selects the sweet reader.
+    assert doc.style_of("$") == TUR_SWEET_MARKER
+
+
+def test_lang_below_the_leading_position_is_not_a_directive(trowel, tmp_path):
+    # A `#lang` on line 3 is ordinary source, so it must not be painted like
+    # the directive it is not.
+    doc = lang_doc(trowel, tmp_path, "sb4.tur",
+                   "(def a 1)\n(def b 2)\n#lang turmeric/sweet\n")
+    assert doc.style_of("#lang", after="(def b 2)") != 22
+
+
+def test_shebang_only_counts_on_line_one(trowel, tmp_path):
+    doc = lang_doc(trowel, tmp_path, "sb5.tur", "(def a 1)\n#!/bin/sh\n")
+    assert doc.style_of("#!/bin/sh") != 1
+
+
+def test_hash_bang_dispatch_form_is_not_a_shebang(trowel, tmp_path):
+    # `#!fold-case`-style reader directives are exactly what reader.c's
+    # "`/`, blank, or EOL" rule protects.
+    doc = lang_doc(trowel, tmp_path, "sb6.tur", "#!fold-case\n(def x 1)\n")
+    assert doc.style_of("#!fold-case") != 1
+
+
+def test_shebang_picks_the_language_of_an_extensionless_file(trowel, tmp_path):
+    doc = lang_doc(trowel, tmp_path, "runner",
+                   "#!/usr/bin/env bash\nexport FOO=1\n")
+    assert doc.style_of("export") == SH_BUILTIN
+
+
+def test_env_dash_s_shebang_still_resolves_the_interpreter(trowel, tmp_path):
+    doc = lang_doc(trowel, tmp_path, "runner2",
+                   "#!/usr/bin/env -S python3 -u\nimport os\n")
+    assert doc.style_of("import") == PY_KEYWORD
+
+
+def test_extension_beats_the_shebang(trowel, tmp_path):
+    # A name that already says what the file is wins; the shebang is only a
+    # fallback for names that say nothing.
+    doc = lang_doc(trowel, tmp_path, "weird.py", "#!/bin/sh\nimport os\n")
+    assert doc.style_of("import") == PY_KEYWORD
+
+
+# --- CMake ------------------------------------------------------------------
+
+
+def test_cmake_file_highlights_as_cmake(trowel, fixture_files):
+    doc = Doc(trowel, fixture_files / "sample.cmake")
+    assert doc.style_of("# A CMake module.") == CM_COMMENT
+    assert doc.style_of("cmake_minimum_required") == CM_COMMAND
+    assert doc.style_of("${MY_SOURCES}") == CM_VARIABLE
+    assert doc.style_of('"on apple') == CM_STRING
+    assert doc.style_of("3.24") == CM_NUMBER
+    assert doc.style_of("ON)") == CM_KEYWORD
+
+
+def test_cmake_control_flow_is_a_keyword(trowel, fixture_files):
+    doc = Doc(trowel, fixture_files / "sample.cmake")
+    assert doc.style_of("if(APPLE") == CM_KEYWORD
+    assert doc.style_of("endif") == CM_KEYWORD
+    assert doc.style_of("AND") == CM_KEYWORD
+
+
+def test_cmakelists_is_recognized_by_name(trowel, tmp_path):
+    doc = lang_doc(trowel, tmp_path, "CMakeLists.txt",
+                   "project(demo)\n")
+    assert doc.style_of("project") == CM_COMMAND
+
+
+# --- TOML -------------------------------------------------------------------
+
+
+def test_toml_file_highlights_as_toml(trowel, fixture_files):
+    doc = Doc(trowel, fixture_files / "sample.toml")
+    assert doc.style_of("# A TOML document.") == TOML_COMMENT
+    assert doc.style_of("title ") == TOML_KEY
+    assert doc.style_of('"trowel"') == TOML_STRING
+    assert doc.style_of("42") == TOML_NUMBER
+    assert doc.style_of("true") == TOML_BOOLEAN
+    assert doc.style_of("2026-07-31") == TOML_DATETIME
+    assert doc.style_of("[package]") == TOML_TABLE
+    assert doc.style_of("[[bin]]") == TOML_TABLE
+
+
+def test_toml_multiline_string_spans_lines(trowel, tmp_path):
+    body = 'desc = """\nstill inside\n"""\nafter = 1\n'
+    doc = lang_doc(trowel, tmp_path, "ml.toml", body)
+    assert doc.style_of("still inside") == TOML_STRING
+    assert doc.style_of("after") == TOML_KEY
+
+
+# --- sh ---------------------------------------------------------------------
+
+
+def test_sh_file_highlights_as_sh(trowel, fixture_files):
+    doc = Doc(trowel, fixture_files / "sample.sh")
+    assert doc.style_of("#!/usr/bin/env bash") == SH_COMMENT
+    assert doc.style_of("# A shell script.") == SH_COMMENT
+    assert doc.style_of("set -euo") == SH_BUILTIN
+    assert doc.style_of("greeting=") == SH_VARIABLE
+    assert doc.style_of('"hello"') == SH_STRING
+    assert doc.style_of("say_hi()") == SH_FUNCTION
+    assert doc.style_of("${greeting}") == SH_VARIABLE
+    assert doc.style_of("if [") == SH_KEYWORD
+
+
+def test_bashrc_is_recognized_by_name(trowel, tmp_path):
+    doc = lang_doc(trowel, tmp_path, ".bashrc", "export PATH=/bin\n")
+    assert doc.style_of("export") == SH_BUILTIN
+
+
+# --- Python -----------------------------------------------------------------
+
+
+def test_python_file_highlights_as_python(trowel, fixture_files):
+    doc = Doc(trowel, fixture_files / "sample.py")
+    assert doc.style_of("#!/usr/bin/env python3") == PY_COMMENT
+    assert doc.style_of('"""Module docstring."""') == PY_TRIPLE
+    assert doc.style_of("import os") == PY_KEYWORD
+    assert doc.style_of("@staticmethod") == PY_DECORATOR
+    assert doc.style_of("def greet") == PY_KEYWORD
+    assert doc.style_of("greet(name)") == PY_FUNCNAME
+    assert doc.style_of("42") == PY_NUMBER
+    assert doc.style_of("print") == PY_BUILTIN
+    assert doc.style_of('f"hello {name}"') == PY_STRING
+    assert doc.style_of("Greeter") == PY_CLASSNAME
+
+
+def test_python_triple_quoted_string_spans_lines(trowel, tmp_path):
+    body = 'x = """\nstill inside\n"""\ny = 1\n'
+    doc = lang_doc(trowel, tmp_path, "ml.py", body)
+    assert doc.style_of("still inside") == PY_TRIPLE
+    assert doc.style_of("y =") == PY_IDENT
+
+
+# --- markdown fences for the new guests -------------------------------------
+
+
+def test_markdown_delegates_new_language_fences(trowel, tmp_path):
+    body = (
+        "text\n\n"
+        "```python\n"
+        "import os\n"
+        "```\n\n"
+        "```toml\n"
+        "key = 1\n"
+        "```\n\n"
+        "```bash\n"
+        "export FOO=1\n"
+        "```\n\n"
+        "```cmake\n"
+        "project(demo)\n"
+        "```\n"
+    )
+    doc = lang_doc(trowel, tmp_path, "guests.md", body)
+    assert doc.style_of("import os") == PY_KEYWORD
+    assert doc.style_of("key = 1") == TOML_KEY
+    assert doc.style_of("export FOO=1") == SH_BUILTIN
+    assert doc.style_of("project(demo)") == CM_COMMAND
+    # ...and the markdown around them is still markdown.
+    assert doc.style_of("text") == MD_DEFAULT
 
 
 # --- dispatch ---------------------------------------------------------------

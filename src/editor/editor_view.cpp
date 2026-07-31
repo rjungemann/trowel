@@ -328,7 +328,10 @@ int EditorView::lineCount() const {
 }
 
 int EditorView::styleAt(int pos) const {
-    return static_cast<int>(sci_->styleAt(pos));
+    // styleIndexAt, not styleAt: the latter goes through Document::StyleAt(),
+    // which returns a signed char, so any style id above 127 (the CMake, TOML,
+    // sh, and Python bands all are) would come back negative.
+    return static_cast<int>(sci_->styleIndexAt(pos));
 }
 
 std::pair<int, int> EditorView::rangeForDiagnostic(const LspDiagnostic& d) const {

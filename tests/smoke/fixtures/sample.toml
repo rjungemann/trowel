@@ -1,0 +1,12 @@
+# A TOML document.
+title = "trowel"
+count = 42
+enabled = true
+released = 2026-07-31
+
+[package]
+name = "demo"
+authors = ["someone"]
+
+[[bin]]
+path = "src/main.rs"

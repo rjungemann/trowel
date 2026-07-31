@@ -49,9 +49,13 @@ add_library(trowel_lib STATIC
     src/editor/lexer_adapter.cpp
     src/editor/scanner.h
     src/editor/scanner_c.cpp
+    src/editor/scanner_cmake.cpp
     src/editor/scanner_json.cpp
     src/editor/scanner_just.cpp
     src/editor/scanner_markdown.cpp
+    src/editor/scanner_python.cpp
+    src/editor/scanner_sh.cpp
+    src/editor/scanner_toml.cpp
     src/editor/scanner_turmeric.cpp
     src/editor/theme_loader.cpp
     src/editor/theme_loader.h
@@ -63,6 +67,8 @@ add_library(trowel_lib STATIC
     src/lsp/lsp_position.h
     src/lsp/lsp_transport.cpp
     src/lsp/lsp_transport.h
+    src/repl/project_runner.cpp
+    src/repl/project_runner.h
     src/repl/pty_session.cpp
     src/repl/pty_session.h
     src/repl/terminal_view.cpp

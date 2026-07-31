@@ -1,5 +1,7 @@
 #pragma once
 
+#include "repl/run_buffer.h"
+
 #include <QFont>
 #include <QMainWindow>
 #include <QStringList>
@@ -12,14 +14,16 @@ class QAction;
 class QDragEnterEvent;
 class QDropEvent;
 class QMenu;
+class QBoxLayout;
+class QScrollArea;
 class QSplitter;
 class QStackedWidget;
-class QToolBar;
 
 namespace trowel {
 
 class DirectoryView;
 class EditorView;
+class ProjectRunner;
 class ReplSession;
 class TabBar;
 class TabContent;
@@ -93,6 +97,7 @@ private slots:
     void focusRepl();
     void toggleReplEditorFocus();
     void runBuffer();
+    void runProject();
     void runSelection();
     void formatFile();
     void requestCompletion();
@@ -122,6 +127,10 @@ private:
     void setupUi();
     void setupMenus();
     void setupToolBar();
+    // Add one icon button (or a separator) to the vertical side bar. The button
+    // takes its icon, tooltip, enabled and checked state from `action`.
+    void addSideBarAction(QAction* action);
+    void addSideBarSeparator();
     void updateWindowTitle();
     bool maybeSaveBuffer(int index);
     bool maybeSaveAll();
@@ -145,6 +154,9 @@ private:
     bool replaceBufferWithFile(int index, const QString& path);
     bool replaceBufferWithDirectory(int index, const QString& path);
     void updateEditorActionsEnabled();
+    // What the run/evaluate action means for the active tab. Disabled for a
+    // non-Turmeric document, Project for a build.tur manifest.
+    EvalMode currentEvalMode() const;
     int nextUntitledIndex() const;
     void refreshTabBar();
     QString computeDisplayName(const Buffer& buf) const;
@@ -168,7 +180,12 @@ private:
     QSplitter* splitter_ = nullptr;
     QMenu* recentMenu_ = nullptr;
     QMenu* windowMenu_ = nullptr;
-    QToolBar* toolBar_ = nullptr;
+    ProjectRunner* projectRunner_ = nullptr;
+    // Vertical icon bar pinned to the upper-left. The scroll area exists purely
+    // so an overflowing button stack can still be wheeled through; its
+    // scrollbars are always off, so no chrome is ever painted.
+    QScrollArea* sideBar_ = nullptr;
+    QBoxLayout* sideBarLayout_ = nullptr;
     QAction* runBufferAction_ = nullptr;
     QAction* runSelectionAction_ = nullptr;
     QAction* restartReplAction_ = nullptr;

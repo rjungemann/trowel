@@ -93,6 +93,23 @@ bool GuestForInfo(const char* text, Sci_Position begin, Sci_Position end,
         guest = Language::Just;
         return true;
     }
+    if (tag == "cmake") {
+        guest = Language::CMake;
+        return true;
+    }
+    if (tag == "toml") {
+        guest = Language::Toml;
+        return true;
+    }
+    if (tag == "sh" || tag == "bash" || tag == "shell" || tag == "zsh"
+        || tag == "console" || tag == "shell-session") {
+        guest = Language::Sh;
+        return true;
+    }
+    if (tag == "python" || tag == "py" || tag == "python3") {
+        guest = Language::Python;
+        return true;
+    }
     return false;
 }
 
@@ -288,7 +305,7 @@ void ScanMarkdownLine(const ScanInput& in, LexState& st, Emitter& out) {
             out.FillTo(end);
             return;
         }
-        const ScanInput sub{text, begin, end, in.rainbow};
+        const ScanInput sub{text, begin, end, in.rainbow, in.line};
         ScanLine(st.mdGuest, sub, st, out);
         out.FillTo(end);
     };

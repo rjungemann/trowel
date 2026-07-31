@@ -170,6 +170,48 @@ void ScanTurmeric(const ScanInput& in, LexState& st, Emitter& out, bool sweet) {
         out.Emit(from, len, static_cast<int>(s));
     };
 
+    // --- Header lines: shebang and #lang -----------------------------------
+    //
+    // Both are position-sensitive in reader.c, so they are handled before the
+    // main loop rather than as another `#` case inside it.
+    //
+    // A Racket-style shebang counts only at byte 0 of the file and must be
+    // `#!` followed by `/`, a blank, or end of line — that is what keeps a
+    // future `#!fold-case`-style dispatch form from being eaten. It runs to
+    // end of line and nothing more, so a `#lang` on the next line is still
+    // seen, both here and by the reader.
+    if (in.line == 0 && i < end
+        && text[i] == '#' && i + 1 < end && text[i + 1] == '!'
+        && (i + 2 >= end || text[i + 2] == '/' || text[i + 2] == ' '
+            || text[i + 2] == '\t')) {
+        emit(i, end - i, TurStyle::LineComment);
+        st.turAfterShebang = true;
+        return;
+    }
+
+    // `#lang` is only a directive in the leading position: line 1 of the file,
+    // or line 2 when line 1 was a shebang. Anywhere else it is ordinary source
+    // and falls through to the main loop, which is what makes the styling agree
+    // with LanguageForBuffer()'s choice of reader.
+    if (in.line == 0 || (in.line == 1 && st.turAfterShebang)) {
+        Sci_Position h = i;
+        while (h < end && (text[h] == ' ' || text[h] == '\t')) ++h;
+        if (h + 5 <= end && text[h] == '#' && text[h + 1] == 'l' && text[h + 2] == 'a'
+            && text[h + 3] == 'n' && text[h + 4] == 'g'
+            && (h + 5 >= end || text[h + 5] == ' ' || text[h + 5] == '\t')) {
+            emit(h, 5, TurStyle::LangDir);
+            h += 5;
+            while (h < end && (text[h] == ' ' || text[h] == '\t')) ++h;
+            const Sci_Position nameStart = h;
+            while (h < end && text[h] != ' ' && text[h] != '\t') ++h;
+            emit(nameStart, h - nameStart, TurStyle::Type);
+            // Trailing layer tokens (`stringed`, `refined`, ...) are part of
+            // the directive line, not source.
+            if (h < end) emit(h, end - h, TurStyle::LangDir);
+            return;
+        }
+    }
+
     // --- Continuations from previous lines ---------------------------------
 
     if (st.turBlockDepth > 0) {
@@ -320,19 +362,6 @@ void ScanTurmeric(const ScanInput& in, LexState& st, Emitter& out, bool sweet) {
             && (i + 2 >= end || !IsSymbolCont(static_cast<unsigned char>(text[i + 2])))) {
             emit(i, 2, TurStyle::Boolean);
             i += 2;
-            continue;
-        }
-
-        // #lang directive at column 0.
-        if (c == '#' && i == in.begin && i + 5 <= end
-            && text[i + 1] == 'l' && text[i + 2] == 'a' && text[i + 3] == 'n'
-            && text[i + 4] == 'g') {
-            emit(i, 5, TurStyle::LangDir);
-            i += 5;
-            while (i < end && (text[i] == ' ' || text[i] == '\t')) ++i;
-            const Sci_Position nameStart = i;
-            while (i < end && text[i] != ' ' && text[i] != '\t') ++i;
-            emit(nameStart, i - nameStart, TurStyle::Type);
             continue;
         }
 

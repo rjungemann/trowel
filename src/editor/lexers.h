@@ -13,9 +13,9 @@ namespace trowel {
 // Languages Trowel can highlight. A document is lexed by one root language;
 // Markdown additionally delegates fenced-code bodies to a guest language, and
 // Turmeric delegates its inline ``` blocks to C.
-// New languages must be appended: the value is packed into a 3-bit field when
-// Markdown records its guest (see kMdGuestShift in lexer_adapter.cpp), and 7 is
-// taken as the "no recognized tag" sentinel, so ids must stay in 0..6.
+// New languages must be appended: the value is packed into a 4-bit field when
+// Markdown records its guest (see kMdGuestShift in lexer_adapter.cpp), and 15
+// is taken as the "no recognized tag" sentinel, so ids must stay in 0..14.
 enum class Language : int {
     Turmeric = 0,
     C,
@@ -26,6 +26,10 @@ enum class Language : int {
     // indentation-sensitive reader's marker syntax. Its own language rather
     // than a flag so path/fence dispatch and the run path can switch on it.
     TurmericSweet,
+    CMake,
+    Toml,
+    Sh,
+    Python,
 };
 
 // Pick a language from a file path alone. Unrecognized (and empty, i.e.
@@ -158,11 +162,69 @@ enum class JustStyle : int {
     Operator,
 };
 
+enum class CMakeStyle : int {
+    Default = 112,
+    Comment,
+    Command,
+    Keyword,
+    Variable,
+    String,
+    StringEscape,
+    Number,
+    Operator,
+    Identifier,
+};
+
+enum class TomlStyle : int {
+    Default = 128,
+    Comment,
+    Table,
+    Key,
+    String,
+    StringEscape,
+    Number,
+    Boolean,
+    DateTime,
+    Operator,
+    Error,
+};
+
+enum class ShStyle : int {
+    Default = 144,
+    Comment,
+    Keyword,
+    Builtin,
+    Function,
+    String,
+    StringEscape,
+    Variable,
+    Number,
+    Operator,
+    Backtick,
+    Identifier,
+};
+
+enum class PyStyle : int {
+    Default = 160,
+    Comment,
+    Keyword,
+    Builtin,
+    Decorator,
+    ClassName,
+    FuncName,
+    String,
+    StringEscape,
+    TripleString,
+    Number,
+    Operator,
+    Identifier,
+};
+
 // Number of distinct colors the rainbow-bracket cycle uses.
 inline constexpr int kRainbowLevels = 7;
 // Highest style id any scanner can emit (inclusive). EditorView applies the
 // editor font across 0..kMaxStyleId.
-inline constexpr int kMaxStyleId = static_cast<int>(JustStyle::Operator);
+inline constexpr int kMaxStyleId = static_cast<int>(PyStyle::Identifier);
 
 // Construct a fresh lexer for `lang`. Ownership passes to Scintilla — release
 // happens via ILexer5::Release(). When `rainbow` is true, brackets are styled

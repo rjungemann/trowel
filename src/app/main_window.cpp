@@ -9,6 +9,7 @@
 #include "editor/editor_view.h"
 #include "editor/theme_loader.h"
 #include "lsp/lsp_manager.h"
+#include "repl/project_runner.h"
 #include "repl/repl_session.h"
 
 #include <ScintillaEdit.h>
@@ -34,11 +35,14 @@
 #include <QProcess>
 #include <QSettings>
 #include <QDir>
+#include <QFrame>
+#include <QHBoxLayout>
+#include <QScrollArea>
+#include <QSizePolicy>
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QStatusBar>
 #include <QStringList>
-#include <QToolBar>
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -100,19 +104,63 @@ void MainWindow::setupUi() {
 
     ApplyThemeToTerminal(terminal_, LoadBuiltinDarkTheme());
 
-    // Central widget: vertical container holding tab bar + splitter.
+    // Central widget: the vertical icon bar on the left, then a column holding
+    // the tab bar over the editor/REPL splitter. The bar lives in the central
+    // widget rather than a QMainWindow toolbar area so it can start flush with
+    // the top-left corner *and* be wrapped in a scroll area — a QToolBar in a
+    // dock area answers overflow with an extension popup, not scrolling.
     auto* central = new QWidget(this);
-    auto* vbox = new QVBoxLayout(central);
+    auto* hbox = new QHBoxLayout(central);
+    hbox->setContentsMargins(0, 0, 0, 0);
+    hbox->setSpacing(0);
+
+    const Theme theme = LoadBuiltinDarkTheme();
+
+    auto* sideBarBody = new QWidget;
+    sideBarLayout_ = new QVBoxLayout(sideBarBody);
+    sideBarLayout_->setContentsMargins(4, 4, 4, 4);
+    sideBarLayout_->setSpacing(6);
+    // Buttons pack from the top; the stretch keeps them there when the window
+    // is taller than the stack.
+    sideBarLayout_->addStretch(1);
+
+    sideBar_ = new QScrollArea(central);
+    sideBar_->setWidget(sideBarBody);
+    sideBar_->setWidgetResizable(true);
+    sideBar_->setFrameShape(QFrame::NoFrame);
+    // Wheel/trackpad scrolling still works with the bars switched off — Qt
+    // keeps the (hidden) scrollbar's range and routes wheel events to it.
+    sideBar_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    sideBar_->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    sideBar_->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
+    // The buttons are flat by design: no frame in any state, and a background
+    // only to show that a checkable action is currently on. `:checked` never
+    // matches a non-checkable button, so plain actions stay bare throughout.
+    sideBar_->setStyleSheet(QString(
+        "QScrollArea, QScrollArea > QWidget > QWidget { background: %1; }"
+        "QScrollArea { border: none; border-right: 1px solid %2; }"
+        "QToolButton { border: none; background: transparent; }"
+        "QToolButton:checked { background: rgba(%3, %4, %5, %6); }"
+    ).arg(theme.editorBg.name(), theme.lineNumberFg.name())
+     // rgba(), not name(): the selection color carries an alpha that name()
+     // would drop, leaving the toggle a solid slab instead of a wash.
+     .arg(theme.selectionBg.red()).arg(theme.selectionBg.green())
+     .arg(theme.selectionBg.blue()).arg(theme.selectionBg.alpha()));
+
+    auto* column = new QWidget(central);
+    auto* vbox = new QVBoxLayout(column);
     vbox->setContentsMargins(0, 0, 0, 0);
     vbox->setSpacing(0);
 
-    tabBar_ = new TabBar(central);
-    const Theme theme = LoadBuiltinDarkTheme();
+    tabBar_ = new TabBar(column);
     tabBar_->setColors(theme.editorBg, theme.editorFg, theme.lineNumberFg);
     tabBar_->setActiveFg(theme.matchedBraceFg);
 
     vbox->addWidget(tabBar_);
     vbox->addWidget(splitter_, 1);
+
+    hbox->addWidget(sideBar_);
+    hbox->addWidget(column, 1);
 
     setCentralWidget(central);
     resize(1200, 800);
@@ -270,51 +318,77 @@ void MainWindow::setupMenus() {
     connect(toggleFocusAction, &QAction::triggered, this, &MainWindow::toggleReplEditorFocus);
 }
 
-void MainWindow::setupToolBar() {
-    toolBar_ = addToolBar("Main");
-    toolBar_->setObjectName("MainToolBar");
-    toolBar_->setMovable(false);
-    toolBar_->setFloatable(false);
-    toolBar_->setIconSize(QSize(18, 18));
-    toolBar_->setToolButtonStyle(Qt::ToolButtonIconOnly);
-    const Theme theme = LoadBuiltinDarkTheme();
-    toolBar_->setStyleSheet(QString(
-        "QToolBar { background: %1; border: none; border-bottom: 1px solid %2;"
-        "           padding: 4px 6px; spacing: 6px; }"
-        "QToolBar::separator { background: %2; width: 1px; margin: 4px 2px; }"
-    ).arg(theme.editorBg.name(), theme.lineNumberFg.name()));
+namespace {
 
+// Icon size is fixed at the value the horizontal toolbar used; the button box
+// and the bar's width are derived from it so the bar stays exactly one button
+// wide however the padding is tuned.
+constexpr int kSideBarGlyphSize = 18;
+constexpr int kSideBarButtonSize = 30;
+// Width of the rule the side bar's stylesheet paints along its right edge.
+constexpr int kSideBarDividerWidth = 1;
+
+}  // namespace
+
+void MainWindow::addSideBarAction(QAction* action) {
+    if (!action || !sideBarLayout_) return;
+    auto* button = new QToolButton(sideBar_->widget());
+    // setDefaultAction wires icon, tooltip, checkable/checked *and* the
+    // enabled state, so the eval gate greys the button out for free.
+    button->setDefaultAction(action);
+    button->setIconSize(QSize(kSideBarGlyphSize, kSideBarGlyphSize));
+    button->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    button->setAutoRaise(true);
+    button->setFixedSize(kSideBarButtonSize, kSideBarButtonSize);
+    // Insert before the trailing stretch.
+    sideBarLayout_->insertWidget(sideBarLayout_->count() - 1, button);
+}
+
+void MainWindow::addSideBarSeparator() {
+    if (!sideBarLayout_) return;
+    auto* line = new QFrame(sideBar_->widget());
+    line->setFrameShape(QFrame::HLine);
+    line->setFixedHeight(1);
+    line->setStyleSheet(QString("background: %1; border: none;")
+                            .arg(LoadBuiltinDarkTheme().lineNumberFg.name()));
+    sideBarLayout_->insertWidget(sideBarLayout_->count() - 1, line);
+}
+
+void MainWindow::setupToolBar() {
+    if (!sideBar_ || !sideBarLayout_) return;
+
+    const Theme theme = LoadBuiltinDarkTheme();
     const QColor iconColor = theme.editorFg;
-    const int glyphSize = 18;
+    const int glyphSize = kSideBarGlyphSize;
 
     if (runBufferAction_) {
         runBufferAction_->setIcon(NerdIcon(NF::Play, glyphSize, iconColor));
-        toolBar_->addAction(runBufferAction_);
+        addSideBarAction(runBufferAction_);
     }
     if (runSelectionAction_) {
         runSelectionAction_->setIcon(NerdIcon(NF::PlaylistPlay, glyphSize, iconColor));
-        toolBar_->addAction(runSelectionAction_);
+        addSideBarAction(runSelectionAction_);
     }
     if (restartReplAction_) {
         restartReplAction_->setIcon(NerdIcon(NF::Restart, glyphSize, iconColor));
-        toolBar_->addAction(restartReplAction_);
+        addSideBarAction(restartReplAction_);
     }
     if (clearReplAction_) {
         clearReplAction_->setIcon(NerdIcon(NF::Broom, glyphSize, iconColor));
-        toolBar_->addAction(clearReplAction_);
+        addSideBarAction(clearReplAction_);
     }
     if (formatFileAction_) {
         formatFileAction_->setIcon(NerdIcon(NF::AutoFix, glyphSize, iconColor));
-        toolBar_->addAction(formatFileAction_);
+        addSideBarAction(formatFileAction_);
     }
 
-    toolBar_->addSeparator();
+    addSideBarSeparator();
 
     toggleSplitAction_ = new QAction("Toggle Split Orientation", this);
     toggleSplitAction_->setToolTip("Toggle REPL position (right / below)");
     toggleSplitAction_->setIcon(NerdIcon(NF::ViewSplitHorizontal, glyphSize, iconColor));
     connect(toggleSplitAction_, &QAction::triggered, this, &MainWindow::toggleSplitOrientation);
-    toolBar_->addAction(toggleSplitAction_);
+    addSideBarAction(toggleSplitAction_);
 
     toggleReplAction_ = new QAction("Show/Hide REPL", this);
     toggleReplAction_->setCheckable(true);
@@ -322,9 +396,9 @@ void MainWindow::setupToolBar() {
     toggleReplAction_->setToolTip("Show/Hide REPL");
     toggleReplAction_->setIcon(NerdIcon(NF::Console, glyphSize, iconColor));
     connect(toggleReplAction_, &QAction::toggled, this, &MainWindow::toggleReplVisible);
-    toolBar_->addAction(toggleReplAction_);
+    addSideBarAction(toggleReplAction_);
 
-    toolBar_->addSeparator();
+    addSideBarSeparator();
 
     auto* settingsMenu = new QMenu(this);
     auto* trowelSettingsAction = settingsMenu->addAction("Trowel Settings");
@@ -334,12 +408,23 @@ void MainWindow::setupToolBar() {
     connect(turmericSettingsAction, &QAction::triggered, this,
             [this]{ openSettingsDirectory(".config/turmeric"); });
 
-    auto* settingsButton = new QToolButton(toolBar_);
+    auto* settingsButton = new QToolButton(sideBar_->widget());
     settingsButton->setToolTip("Settings");
     settingsButton->setIcon(NerdIcon(NF::Cog, glyphSize, iconColor));
+    settingsButton->setIconSize(QSize(glyphSize, glyphSize));
+    settingsButton->setAutoRaise(true);
+    settingsButton->setFixedSize(kSideBarButtonSize, kSideBarButtonSize);
     settingsButton->setMenu(settingsMenu);
     settingsButton->setPopupMode(QToolButton::InstantPopup);
-    toolBar_->addWidget(settingsButton);
+    // No arrow: the indicator would eat into the 18px glyph inside a
+    // button this narrow.
+    settingsButton->setStyleSheet("QToolButton::menu-indicator { image: none; }");
+    sideBarLayout_->insertWidget(sideBarLayout_->count() - 1, settingsButton);
+
+    // Exactly as wide as the stack needs, plus the 1px divider the stylesheet
+    // draws on the right — that border comes out of the viewport, so without it
+    // the bar would have a permanent one-pixel horizontal scroll range.
+    sideBar_->setFixedWidth(sideBarLayout_->minimumSize().width() + kSideBarDividerWidth);
 }
 
 void MainWindow::toggleReplVisible(bool visible) {
@@ -441,7 +526,11 @@ void MainWindow::connectBufferSignals(int index) {
         const int i = indexOfView(view);
         if (i < 0) return;
         updateBufferDisplayName(i);
-        if (i == activeIndex_) updateWindowTitle();
+        if (i != activeIndex_) return;
+        updateWindowTitle();
+        // A Save As can turn a plain script into a build.tur (or a .tur into a
+        // .txt), so the eval gate has to be re-evaluated on rename too.
+        updateEditorActionsEnabled();
     });
     connect(view, &TabContent::displayNameChanged, this, [this, view]() {
         const int i = indexOfView(view);
@@ -556,6 +645,9 @@ void MainWindow::closeBuffer(int index) {
     refreshTabBar();
     if (tabBar_) tabBar_->setActive(activeIndex_);
     updateWindowTitle();
+    // Closing a tab makes a different document active, which may well have a
+    // different eval mode.
+    updateEditorActionsEnabled();
 }
 
 void MainWindow::ensureAtLeastOneBuffer() {
@@ -700,14 +792,44 @@ bool MainWindow::replaceBufferWithFile(int index, const QString& path) {
     return true;
 }
 
+EvalMode MainWindow::currentEvalMode() const {
+    EditorView* v = editorView();
+    if (!v) return EvalMode::Disabled;
+    return EvalModeForPath(v->filePath());
+}
+
 void MainWindow::updateEditorActionsEnabled() {
     const bool hasEditor = editorView() != nullptr;
     if (saveAction_) saveAction_->setEnabled(hasEditor);
     if (saveAsAction_) saveAsAction_->setEnabled(hasEditor);
-    if (runBufferAction_) runBufferAction_->setEnabled(hasEditor);
-    if (runSelectionAction_) runSelectionAction_->setEnabled(hasEditor);
     if (formatFileAction_) formatFileAction_->setEnabled(hasEditor);
     if (pickFontAction_) pickFontAction_->setEnabled(hasEditor);
+
+    // Evaluation only makes sense for Turmeric documents. A `build.tur` is a
+    // Turmeric file but not a script, so the same action turns into "build the
+    // project that owns this manifest" — and running a *selection* of a
+    // manifest means nothing, so that one stays off.
+    const EvalMode mode = currentEvalMode();
+    if (runBufferAction_) {
+        runBufferAction_->setEnabled(mode != EvalMode::Disabled);
+        if (mode == EvalMode::Project) {
+            runBufferAction_->setText("&Build Project");
+            runBufferAction_->setToolTip("Build the project this build.tur describes");
+        } else {
+            runBufferAction_->setText("&Run Buffer");
+            runBufferAction_->setToolTip(
+                mode == EvalMode::Buffer
+                    ? QStringLiteral("Evaluate File")
+                    : QStringLiteral("Evaluation is only available for Turmeric files"));
+        }
+    }
+    if (runSelectionAction_) {
+        runSelectionAction_->setEnabled(mode == EvalMode::Buffer);
+        runSelectionAction_->setToolTip(
+            mode == EvalMode::Buffer
+                ? QStringLiteral("Evaluate Selection")
+                : QStringLiteral("Evaluation is only available for Turmeric files"));
+    }
 }
 
 void MainWindow::rememberRecentFile(const QString& path) {
@@ -943,13 +1065,47 @@ void MainWindow::restartReplInDirectory() {
 void MainWindow::runBuffer() {
     EditorView* v = editorView();
     if (!v) return;
+    // The action is greyed out in this case, but the control socket and any
+    // stale shortcut route here too — so the gate lives here, not only in the
+    // enabled state.
+    const EvalMode mode = EvalModeForPath(v->filePath());
+    if (mode == EvalMode::Disabled) {
+        statusBar()->show();
+        statusBar()->showMessage(
+            "Evaluation is only available for Turmeric files.", 4000);
+        return;
+    }
+    if (mode == EvalMode::Project) {
+        runProject();
+        return;
+    }
     const RunResult r = RunBuffer(v, repl_);
     if (!r.ok) statusBar()->showMessage(r.message, 4000);
+}
+
+void MainWindow::runProject() {
+    EditorView* v = editorView();
+    if (!v) return;
+    const QString dir = ProjectDirForPath(v->filePath());
+    if (dir.isEmpty()) return;
+    // The manifest on disk is what `tur build` reads, so an unsaved edit would
+    // silently build the previous version.
+    if (v->isModified() && !save()) return;
+    if (!projectRunner_) projectRunner_ = new ProjectRunner(terminal_, this);
+    const RunResult r = projectRunner_->run(dir);
+    statusBar()->show();
+    statusBar()->showMessage(r.message, 4000);
 }
 
 void MainWindow::runSelection() {
     EditorView* v = editorView();
     if (!v) return;
+    if (EvalModeForPath(v->filePath()) != EvalMode::Buffer) {
+        statusBar()->show();
+        statusBar()->showMessage(
+            "Evaluation is only available for Turmeric files.", 4000);
+        return;
+    }
     const auto [start, end] = v->selectionRange();
     const RunResult r = RunRange(v, repl_, start, end);
     if (!r.ok) statusBar()->showMessage(r.message, 4000);
@@ -1313,6 +1469,7 @@ void MainWindow::applySessionState(const QVariantMap& state) {
         editorStack_->setCurrentWidget(buffers_[activeIndex_]->view);
     }
     refreshTabBar();
+    updateEditorActionsEnabled();
 }
 
 QVariantMap MainWindow::sessionState() const {

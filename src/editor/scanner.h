@@ -51,10 +51,12 @@ private:
 //
 // The deepest legal nesting is Markdown hosting a Turmeric fence that itself
 // hosts an inline C block, so Markdown, Turmeric, and C state must all be live
-// simultaneously. JSON and Just can only ever be a root language or a Markdown
-// guest, never a host, but they get their own bits anyway rather than aliasing
-// Turmeric's — it all fits, and non-aliased state can't be corrupted by a
-// scanner that forgets to reset.
+// simultaneously. Every other language is a *leaf*: it can be a root language
+// or a Markdown guest, but never a host, so at most one of them is ever live.
+// Their state therefore shares one small bit field (see kLeafShift in
+// lexer_adapter.cpp) instead of each claiming its own — there is not room for
+// ten languages otherwise. ResetGuestState() clears the whole field whenever
+// the active language changes, so stale bits can never leak across a switch.
 struct LexState {
     // --- Turmeric ---
     int turBlockDepth = 0;    // nested #| |# depth, capped
@@ -63,12 +65,16 @@ struct LexState {
     bool turInString = false;
     bool turInCBlock = false;
     bool turInDatumComment = false;
+    // Line 0 was a `#!` shebang, so a `#lang` directive on line 1 is still in
+    // the leading position the reader accepts it from.
+    bool turAfterShebang = false;
 
-    // --- JSON ---
+    // --- leaf languages (mutually exclusive; share one bit field) ---
     int jsonDepth = 0;
-
-    // --- Just ---
     bool justInRecipe = false;
+    int pyStringMode = 0;    // 0 none, 1 ''' , 2 """
+    int tomlStringMode = 0;  // 0 none, 1 ''' , 2 """
+    int shStringMode = 0;    // 0 none, 1 '...' , 2 "..."
 
     // --- C (coexists with Turmeric) ---
     bool cInComment = false;
@@ -88,7 +94,10 @@ inline constexpr int kMaxTurBlockDepth = 7;
 inline constexpr int kMaxTurDcDepth = 7;
 inline constexpr int kMaxTurBracketDepth = 127;
 inline constexpr int kMaxJsonDepth = 31;
-inline constexpr int kMaxMdFenceExtra = 7;
+// Opening-fence length minus 3. Two bits: a ``````` fence (six backticks) is
+// already well past anything real, and the bit had to go to the widened guest
+// field when the language count outgrew three bits.
+inline constexpr int kMaxMdFenceExtra = 3;
 
 int PackLexState(const LexState& st);
 LexState UnpackLexState(int packed);
@@ -109,6 +118,10 @@ struct ScanInput {
     Sci_Position begin = 0;
     Sci_Position end = 0;
     bool rainbow = true;
+    // Zero-based document line number. Only the header-sensitive constructs
+    // need it — a `#!` shebang is a shebang at line 0 only, and `#lang` counts
+    // only on line 0, or line 1 when line 0 was a shebang.
+    Sci_Position line = 0;
 };
 
 void ScanTurmericLine(const ScanInput& in, LexState& st, Emitter& out);
@@ -119,6 +132,10 @@ void ScanCLine(const ScanInput& in, LexState& st, Emitter& out);
 void ScanMarkdownLine(const ScanInput& in, LexState& st, Emitter& out);
 void ScanJsonLine(const ScanInput& in, LexState& st, Emitter& out);
 void ScanJustLine(const ScanInput& in, LexState& st, Emitter& out);
+void ScanCMakeLine(const ScanInput& in, LexState& st, Emitter& out);
+void ScanTomlLine(const ScanInput& in, LexState& st, Emitter& out);
+void ScanShLine(const ScanInput& in, LexState& st, Emitter& out);
+void ScanPythonLine(const ScanInput& in, LexState& st, Emitter& out);
 
 // Dispatch to the scanner for `lang`.
 void ScanLine(Language lang, const ScanInput& in, LexState& st, Emitter& out);

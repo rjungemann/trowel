@@ -73,6 +73,37 @@ RunResult writeScratchAndLoad(ReplSession* repl,
     return r;
 }
 
+// True when `name` is one of the two spellings the toolchain accepts for a
+// project manifest. See the Turmeric "developing spices" guide: `build.tur`
+// and `build.tur.sweet` are equivalent everywhere, with the plain one winning
+// when both are present.
+bool isBuildManifestName(const QString& name) {
+    return name.compare("build.tur", Qt::CaseInsensitive) == 0
+        || name.compare("build.tur.sweet", Qt::CaseInsensitive) == 0;
+}
+
+// Extensions that make a file Turmeric source. Mirrors LanguageForPath's
+// extension table minus its catch-all fallback.
+bool hasTurmericExtension(const QString& name) {
+    const QString lower = name.toLower();
+    return lower.endsWith(".tur") || lower.endsWith(".tur.sweet")
+        || lower.endsWith(".sweet");
+}
+
+}
+
+EvalMode EvalModeForPath(const QString& path) {
+    if (path.isEmpty()) return EvalMode::Buffer;  // untitled scratch buffer
+    const QString name = QFileInfo(path).fileName();
+    if (isBuildManifestName(name)) return EvalMode::Project;
+    return hasTurmericExtension(name) ? EvalMode::Buffer : EvalMode::Disabled;
+}
+
+QString ProjectDirForPath(const QString& buildManifestPath) {
+    if (buildManifestPath.isEmpty()) return {};
+    const QFileInfo info(buildManifestPath);
+    if (!isBuildManifestName(info.fileName())) return {};
+    return info.absolutePath();
 }
 
 RunResult RunBuffer(EditorView* editor, ReplSession* repl) {
