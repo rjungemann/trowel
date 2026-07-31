@@ -73,6 +73,10 @@ bool GuestForInfo(const char* text, Sci_Position begin, Sci_Position end,
             std::tolower(static_cast<unsigned char>(text[k]))));
     }
 
+    if (tag == "sweet" || tag == "turmeric-sweet" || tag == "tur-sweet") {
+        guest = Language::TurmericSweet;
+        return true;
+    }
     if (tag == "turmeric" || tag == "tur" || tag == "lisp" || tag == "scheme") {
         guest = Language::Turmeric;
         return true;
@@ -295,8 +299,12 @@ void ScanMarkdownLine(const ScanInput& in, LexState& st, Emitter& out) {
         // its own inline ``` C block, a bare ``` line belongs to the guest as
         // *its* closer — not to us. Without this, an equal-length inner fence
         // (``` inside a ```turmeric block) would tear the outer block open.
+        // Both Turmeric guests delegate their inline ``` blocks to C, so both
+        // can own a bare fence line.
         const bool guestOwnsFence =
-            !st.mdGuestPlain && st.mdGuest == Language::Turmeric && st.turInCBlock;
+            !st.mdGuestPlain
+            && (st.mdGuest == Language::Turmeric || st.mdGuest == Language::TurmericSweet)
+            && st.turInCBlock;
 
         if (!guestOwnsFence) {
             const Fence f = DetectFence(text, begin, end);

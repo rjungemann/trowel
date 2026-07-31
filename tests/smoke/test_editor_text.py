@@ -56,3 +56,27 @@ def test_newline_creates_second_line(trowel):
     trowel.press("Return")
     c = trowel.call("editor.get_cursor")
     assert c["line"] == 1
+
+
+def test_enter_carries_indent_in_sweet_buffers(trowel, tmp_path):
+    # Sweet-expression source is indentation-sensitive, so Enter copies the
+    # previous line's leading whitespace onto the new line.
+    f = tmp_path / "indent.tur.sweet"
+    f.write_text("def outer\n  + 1 2\n")
+    trowel.call("editor.open", {"path": str(f)})
+    trowel.call("editor.set_cursor", {"line": 1, "col": 7})
+    trowel.press("Return")
+    trowel.type("+ 3 4")
+    assert trowel.call("editor.get_text")["text"] == "def outer\n  + 1 2\n  + 3 4\n"
+
+
+def test_enter_does_not_auto_indent_plain_turmeric(trowel, tmp_path):
+    # Paren-delimited Turmeric keeps the plain behavior rather than inherit a
+    # half-rule; only the sweet reader depends on indentation.
+    f = tmp_path / "indent.tur"
+    f.write_text("(def outer\n  1)\n")
+    trowel.call("editor.open", {"path": str(f)})
+    trowel.call("editor.set_cursor", {"line": 1, "col": 4})
+    trowel.press("Return")
+    trowel.type("x")
+    assert trowel.call("editor.get_text")["text"] == "(def outer\n  1)\nx\n"

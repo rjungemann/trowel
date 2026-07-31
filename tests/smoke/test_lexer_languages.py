@@ -14,6 +14,9 @@ import pytest
 
 TUR_DEFINE = 14
 TUR_CBLOCK = 21
+TUR_NEOTERIC = 25
+TUR_IDENT = 26
+TUR_SWEET_MARKER = 28
 TUR_BAND = range(0, 31)
 RAINBOW_BAND = range(40, 48)
 
@@ -174,6 +177,145 @@ def test_justfile_highlights_as_just(trowel, fixture_files):
     assert doc.style_of("build:") == JUST_RECIPE
     assert doc.style_of("configure\n") == JUST_DEP
     assert doc.style_of("{{preset}}") == JUST_INTERP
+
+
+# --- sweet expressions ------------------------------------------------------
+
+
+@pytest.fixture
+def sweet(trowel, fixture_files):
+    return Doc(trowel, fixture_files / "sweet_syntax.tur.sweet")
+
+
+def test_sweet_markers_are_styled(sweet):
+    # The two markers the reader actually accepts: GROUP/SPLIT `$`, and a lone
+    # `\` SPLIT on its own line.
+    assert sweet.style_of("$") == TUR_SWEET_MARKER
+    assert sweet.style_of("\\") == TUR_SWEET_MARKER
+
+
+def test_sweet_keywords_highlight_without_parens(sweet):
+    # Keyword styling is position-independent, so a paren-less `def` line reads
+    # the same as `(def ...)`.
+    assert sweet.style_of("def sweet-plain") == TUR_DEFINE
+    assert sweet.style_of("defn sweet-add") == TUR_DEFINE
+
+
+def test_sweet_neoteric_and_curly_infix(sweet):
+    assert sweet.style_of("sweet-add(1 2)") == TUR_NEOTERIC
+    assert sweet.style_of("{3 + 4}") in RAINBOW_BAND
+
+
+def test_dollar_is_not_a_marker_in_plain_turmeric(trowel):
+    # `$` is a legal symbol character, so outside sweet mode it must stay an
+    # identifier rather than pick up the marker color.
+    text = "(def x $)\n"
+    trowel.call("editor.set_text", {"text": text})
+    assert style_at(trowel, text.index("$")) != TUR_SWEET_MARKER
+
+
+def test_dollar_prefixed_symbol_is_not_a_marker(trowel, tmp_path):
+    # `$foo` is one symbol; only a standalone `$` is the GROUP marker.
+    f = tmp_path / "dollar.tur.sweet"
+    f.write_text("def $named 1\n")
+    trowel.call("editor.open", {"path": str(f)})
+    doc = Doc(trowel, f)
+    assert doc.style_of("$named") == TUR_IDENT
+
+
+def test_markdown_sweet_fence_delegates_to_sweet(md):
+    assert md.style_of("def fenced-sweet") == TUR_DEFINE
+    assert md.style_of("$", after="def fenced-sweet") == TUR_SWEET_MARKER
+
+
+# --- #lang directive --------------------------------------------------------
+#
+# Trowel mirrors the toolchain's own precedence (elab_toplevel.c): an extension
+# that names a non-default reader wins, otherwise the `#lang` line decides.
+
+
+def lang_doc(trowel, tmp_path, name, body):
+    f = tmp_path / name
+    f.write_text(body)
+    trowel.call("editor.open", {"path": str(f)})
+    return Doc(trowel, f)
+
+
+def test_lang_sweet_in_tur_file_selects_sweet(trowel, tmp_path):
+    # `.tur` is the default reader, so the directive decides.
+    doc = lang_doc(trowel, tmp_path, "a.tur", "#lang turmeric/sweet\ndef x $ + 1 2\n")
+    assert doc.style_of("$") == TUR_SWEET_MARKER
+
+
+def test_legacy_sweet_exp_alias_still_selects_sweet(trowel, tmp_path):
+    doc = lang_doc(trowel, tmp_path, "b.tur", "#lang sweet-exp\ndef x $ + 1 2\n")
+    assert doc.style_of("$") == TUR_SWEET_MARKER
+
+
+def test_lang_turmeric_does_not_make_a_tur_file_sweet(trowel, tmp_path):
+    doc = lang_doc(trowel, tmp_path, "c.tur", "#lang turmeric\n(def x $)\n")
+    assert doc.style_of("$") != TUR_SWEET_MARKER
+
+
+def test_sweet_extension_beats_a_plain_lang_directive(trowel, tmp_path):
+    # `.tur.sweet` already names a non-default reader, so it wins and the
+    # directive is only a redundant hint — matching how the file would run.
+    doc = lang_doc(trowel, tmp_path, "d.tur.sweet",
+                   "#lang turmeric\ndef x $ + 1 2\n")
+    assert doc.style_of("$") == TUR_SWEET_MARKER
+
+
+def test_bare_sweet_extension_is_plain_turmeric(trowel, tmp_path):
+    # Turmeric's reader_type_from_extension only knows `.tur.sweet`; a bare
+    # `.sweet` runs as ordinary Turmeric, so it must highlight that way.
+    doc = lang_doc(trowel, tmp_path, "e.sweet", "def x $ + 1 2\n")
+    assert doc.style_of("$") != TUR_SWEET_MARKER
+
+
+def test_bare_sweet_extension_honors_lang_directive(trowel, tmp_path):
+    doc = lang_doc(trowel, tmp_path, "f.sweet",
+                   "#lang turmeric/sweet\ndef x $ + 1 2\n")
+    assert doc.style_of("$") == TUR_SWEET_MARKER
+
+
+def test_lang_line_after_shebang_is_honored(trowel, tmp_path):
+    doc = lang_doc(trowel, tmp_path, "g.tur",
+                   "#!/usr/bin/env tur\n#lang turmeric/sweet\ndef x $ + 1 2\n")
+    assert doc.style_of("$") == TUR_SWEET_MARKER
+
+
+def test_lang_layers_do_not_disturb_the_base(trowel, tmp_path):
+    # Layer tokens follow the base name and don't change the reader.
+    doc = lang_doc(trowel, tmp_path, "h.tur",
+                   "#lang turmeric/sweet stringed\ndef x $ + 1 2\n")
+    assert doc.style_of("$") == TUR_SWEET_MARKER
+
+
+def test_lang_directive_is_ignored_below_line_one(trowel, tmp_path):
+    doc = lang_doc(trowel, tmp_path, "i.tur",
+                   "(def a 1)\n#lang turmeric/sweet\ndef x $ + 1 2\n")
+    assert doc.style_of("$") != TUR_SWEET_MARKER
+
+
+def test_typing_a_lang_line_switches_language_live(trowel):
+    # Untitled buffer: no extension to go on, so the directive is the only
+    # signal — and it has to take effect without a save.
+    plain = "def x $ + 1 2\n"
+    trowel.call("editor.set_text", {"text": plain})
+    assert style_at(trowel, plain.index("$")) != TUR_SWEET_MARKER
+
+    switched = "#lang turmeric/sweet\ndef x $ + 1 2\n"
+    trowel.call("editor.set_text", {"text": switched})
+    assert style_at(trowel, switched.index("$")) == TUR_SWEET_MARKER
+
+
+def test_lang_line_in_a_markdown_file_is_not_a_directive(trowel, tmp_path):
+    # Only Turmeric-family extensions consult the directive; elsewhere it is
+    # just text.
+    # (`#lang` is not a heading either — ATX headings need a space after the
+    # hash — so this asserts the Markdown band rather than a specific style.)
+    doc = lang_doc(trowel, tmp_path, "j.md", "#lang turmeric/sweet\n")
+    assert doc.style_of("#lang turmeric/sweet") in MD_BAND
 
 
 # --- dispatch ---------------------------------------------------------------

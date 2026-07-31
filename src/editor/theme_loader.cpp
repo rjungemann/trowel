@@ -82,6 +82,7 @@ const QHash<QString, int>& StyleKeyMap() {
         {"neotericCall", id(TurStyle::NeotericCall)},
         {"identifier",   id(TurStyle::Identifier)},
         {"invalid",      id(TurStyle::Invalid)},
+        {"sweetMarker",  id(TurStyle::SweetMarker)},
         {"rainbow0",     id(TurStyle::Rainbow0)},
         {"rainbow1",     id(TurStyle::Rainbow1)},
         {"rainbow2",     id(TurStyle::Rainbow2)},

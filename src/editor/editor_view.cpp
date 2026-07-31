@@ -51,6 +51,9 @@ EditorView::EditorView(QWidget* parent)
             Scintilla::ModificationFlags::InsertText | Scintilla::ModificationFlags::DeleteText;
         if ((type & kContentChange) == Scintilla::ModificationFlags::None) return;
         docVersion_++;
+        // A `#lang` line can be typed, pasted, or edited away at any moment,
+        // so the language is re-derived per edit rather than only on open.
+        refreshLanguage();
         emit contentChanged(docVersion_);
     });
 
@@ -59,6 +62,7 @@ EditorView::EditorView(QWidget* parent)
     // a didChange plus a full compile on the server's single thread. Explicit
     // completion (Ctrl+Space) covers the rest.
     connect(sci_, &ScintillaEditBase::charAdded, this, [this](int ch) {
+        if (ch == '\n') autoIndentAfterNewline();
         if (ch == '(') emit completionRequested(cursorPos());
     });
 
@@ -187,6 +191,31 @@ void EditorView::installLexer() {
     // Re-lex the whole document so existing text picks up the new styling
     // immediately.
     sci_->colourise(0, -1);
+}
+
+void EditorView::autoIndentAfterNewline() {
+    // Sweet-expression source is indentation-sensitive, so losing the indent on
+    // every Enter is actively painful there. The other languages Trowel handles
+    // are brace- or paren-delimited and have gotten along without auto-indent,
+    // so they keep the plain behavior rather than inherit a half-rule.
+    if (language_ != Language::TurmericSweet) return;
+
+    const int pos = cursorPos();
+    const int line = static_cast<int>(sci_->lineFromPosition(pos));
+    if (line <= 0) return;
+    // Only act when the caret is at the head of the new line. Splitting a line
+    // in the middle carries its own text along; injecting indent there would
+    // push that text rightward instead of lining it up.
+    if (pos != static_cast<int>(sci_->positionFromLine(line))) return;
+
+    const QByteArray prev = sci_->getLine(line - 1);
+    int n = 0;
+    while (n < prev.size() && (prev[n] == ' ' || prev[n] == '\t')) ++n;
+    if (n == 0) return;
+
+    const QByteArray indent = prev.left(n);
+    sci_->insertText(pos, indent.constData());
+    setCursorPos(pos + n);
 }
 
 void EditorView::setRainbowBrackets(bool enabled) {
@@ -397,14 +426,31 @@ void EditorView::showHover(int pos, const QString& markdown) {
 void EditorView::setPath(const QString& path) {
     if (path_ == path) return;
     path_ = path;
-    // Re-highlight when the path implies a different language. This covers
-    // opening a file into a fresh tab as well as Save As to a new extension.
-    const Language lang = LanguageForPath(path_);
-    if (lang != language_) {
-        language_ = lang;
-        installLexer();
-    }
+    // Covers opening a file into a fresh tab as well as Save As to a new
+    // extension.
+    refreshLanguage();
     emit filePathChanged(path_);
+}
+
+void EditorView::refreshLanguage() {
+    const Language lang = LanguageForBuffer(path_, languageProbeText());
+    if (lang == language_) return;
+    language_ = lang;
+    installLexer();
+}
+
+QByteArray EditorView::langDirectiveLine() const {
+    return LangDirectiveLine(languageProbeText());
+}
+
+QByteArray EditorView::languageProbeText() const {
+    // Two lines, not one: a `#lang` directive may sit on line 2 when line 1 is
+    // a `#!` shebang. Bounding the probe keeps this affordable on every edit.
+    const int probeLines = 2;
+    const int end = (lineCount() > probeLines)
+                        ? static_cast<int>(sci_->positionFromLine(probeLines))
+                        : static_cast<int>(sci_->textLength());
+    return textInRange(0, end);
 }
 
 }

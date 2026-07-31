@@ -6,23 +6,43 @@
 // here would also drag in Qt's `emit` keyword macro, which collides with the
 // natural name for a style-emitting helper throughout the scanners.
 class QString;
+class QByteArray;
 
 namespace trowel {
 
 // Languages Trowel can highlight. A document is lexed by one root language;
 // Markdown additionally delegates fenced-code bodies to a guest language, and
 // Turmeric delegates its inline ``` blocks to C.
+// New languages must be appended: the value is packed into a 3-bit field when
+// Markdown records its guest (see kMdGuestShift in lexer_adapter.cpp), and 7 is
+// taken as the "no recognized tag" sentinel, so ids must stay in 0..6.
 enum class Language : int {
     Turmeric = 0,
     C,
     Markdown,
     Json,
     Just,
+    // Sweet-expression Turmeric: same tokens and keywords, plus the
+    // indentation-sensitive reader's marker syntax. Its own language rather
+    // than a flag so path/fence dispatch and the run path can switch on it.
+    TurmericSweet,
 };
 
-// Pick a language from a file path. Unrecognized (and empty, i.e. untitled)
-// paths fall back to Turmeric, matching Trowel's pre-existing behavior.
+// Pick a language from a file path alone. Unrecognized (and empty, i.e.
+// untitled) paths fall back to Turmeric, matching Trowel's pre-existing
+// behavior.
 Language LanguageForPath(const QString& path);
+
+// Pick a language from a path *and* the buffer's contents, so that a `#lang`
+// directive on line 1 selects the reader the way the toolchain does. This is
+// what an editor buffer should use; LanguageForPath is the extension half of
+// it. Untitled buffers get a language this way too.
+Language LanguageForBuffer(const QString& path, const QByteArray& text);
+
+// The buffer's `#lang` line, newline-terminated, or empty if it has none.
+// Running a *selection* would otherwise drop it, losing any layers and any
+// base the file extension cannot express.
+QByteArray LangDirectiveLine(const QByteArray& text);
 
 // Style IDs applied by the Turmeric scanner. Names mirror the theme keys in
 // resources/turmeric-dark.theme.json.
@@ -55,6 +75,9 @@ enum class TurStyle : int {
     NeotericCall,
     Identifier,
     Invalid,
+    // Sweet-expression reader markers ($ and a lone \). Only ever emitted by
+    // the sweet variant of the Turmeric scanner.
+    SweetMarker,
 
     Count,
 

@@ -24,4 +24,9 @@ long wide = 1;
 (def still-turmeric 2)
 ````
 
+```sweet
+def fenced-sweet
+  + 1 $ * 2 3
+```
+
 Done.

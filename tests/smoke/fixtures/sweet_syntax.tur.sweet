@@ -1,0 +1,11 @@
+; Sweet-expression syntax the lexer has to recognize.
+def sweet-plain 7
+def sweet-grouped
+  + 1 $ * 2 3
+defn sweet-add [a b]
+  + a b
+def sweet-called sweet-add(1 2)
+def sweet-infix {3 + 4}
+def sweet-before 1
+\
+def sweet-after 2

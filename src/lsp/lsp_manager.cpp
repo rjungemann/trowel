@@ -72,7 +72,11 @@ QString LspManager::PathForUri(const QString& uri) {
 
 QString LspManager::UriFor(EditorView* view) {
     if (!view) return {};
-    if (view->language() != Language::Turmeric) return {};
+    // Both Turmeric dialects are served by the same language server.
+    if (view->language() != Language::Turmeric
+        && view->language() != Language::TurmericSweet) {
+        return {};
+    }
     // No path means no stable URI, and the server resolves diagnostics against
     // a real file path. Untitled buffers are out of scope for v1.
     return UriForPath(view->filePath());

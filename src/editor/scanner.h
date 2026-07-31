@@ -112,6 +112,9 @@ struct ScanInput {
 };
 
 void ScanTurmericLine(const ScanInput& in, LexState& st, Emitter& out);
+// Turmeric with the sweet-expression reader's markers recognized. Identical to
+// ScanTurmericLine apart from the extra marker tokens, so both share an impl.
+void ScanTurmericSweetLine(const ScanInput& in, LexState& st, Emitter& out);
 void ScanCLine(const ScanInput& in, LexState& st, Emitter& out);
 void ScanMarkdownLine(const ScanInput& in, LexState& st, Emitter& out);
 void ScanJsonLine(const ScanInput& in, LexState& st, Emitter& out);

@@ -146,9 +146,21 @@ Sci_Position ConsumeCBlock(const ScanInput& in, LexState& st, Emitter& out,
     return in.end;
 }
 
+// True when `$` at `i` stands alone as the sweet reader's GROUP/SPLIT marker
+// rather than opening a symbol like `$foo` (IsSymbolStart accepts '$').
+bool IsSweetGroupAt(const char* text, Sci_Position i, Sci_Position end) {
+    return text[i] == '$'
+        && (i + 1 >= end || !IsSymbolCont(static_cast<unsigned char>(text[i + 1])));
 }
 
-void ScanTurmericLine(const ScanInput& in, LexState& st, Emitter& out) {
+// True when `\` at `i` is the sweet reader's SPLIT marker: a lone backslash,
+// not the `#\` character-literal prefix (which the main loop consumes first).
+bool IsSweetSplitAt(const char* text, Sci_Position i, Sci_Position end) {
+    return text[i] == '\\'
+        && (i + 1 >= end || text[i + 1] == ' ' || text[i + 1] == '\t');
+}
+
+void ScanTurmeric(const ScanInput& in, LexState& st, Emitter& out, bool sweet) {
     const char* text = in.text;
     const Sci_Position end = in.end;
     Sci_Position i = in.begin;
@@ -369,6 +381,15 @@ void ScanTurmericLine(const ScanInput& in, LexState& st, Emitter& out) {
             emit(i, 1, TurStyle::Quote); ++i; continue;
         }
 
+        // Sweet-expression reader markers. Checked before the identifier path
+        // because IsSymbolStart accepts '$', which would otherwise swallow a
+        // standalone GROUP marker as a one-character symbol.
+        if (sweet && (IsSweetGroupAt(text, i, end) || IsSweetSplitAt(text, i, end))) {
+            emit(i, 1, TurStyle::SweetMarker);
+            ++i;
+            continue;
+        }
+
         // Delimiters. With rainbow coloring on, every bracket type is painted
         // by its nesting depth so matching pairs share a color; an unmatched
         // closer is flagged. Without it, brackets fall back to the flat
@@ -442,6 +463,16 @@ void ScanTurmericLine(const ScanInput& in, LexState& st, Emitter& out) {
         emit(i, 1, TurStyle::Default);
         ++i;
     }
+}
+
+}
+
+void ScanTurmericLine(const ScanInput& in, LexState& st, Emitter& out) {
+    ScanTurmeric(in, st, out, /*sweet=*/false);
+}
+
+void ScanTurmericSweetLine(const ScanInput& in, LexState& st, Emitter& out) {
+    ScanTurmeric(in, st, out, /*sweet=*/true);
 }
 
 }

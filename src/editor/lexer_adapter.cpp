@@ -132,6 +132,7 @@ void ScanLine(Language lang, const ScanInput& in, LexState& st, Emitter& out) {
     case Language::Markdown: ScanMarkdownLine(in, st, out); break;
     case Language::Json:     ScanJsonLine(in, st, out); break;
     case Language::Just:     ScanJustLine(in, st, out); break;
+    case Language::TurmericSweet: ScanTurmericSweetLine(in, st, out); break;
     case Language::Turmeric: ScanTurmericLine(in, st, out); break;
     }
 }
@@ -142,6 +143,7 @@ int DefaultStyleFor(Language lang) {
     case Language::Markdown: return static_cast<int>(MdStyle::Default);
     case Language::Json:     return static_cast<int>(JsonStyle::Default);
     case Language::Just:     return static_cast<int>(JustStyle::Default);
+    case Language::TurmericSweet:
     case Language::Turmeric: break;
     }
     return static_cast<int>(TurStyle::Default);
@@ -158,6 +160,12 @@ Language LanguageForPath(const QString& path) {
         return Language::Just;
     }
 
+    // Mirrors reader_type_from_extension() in Turmeric's reader.c, which
+    // recognizes exactly one suffix: `.tur.sweet`. A bare `.sweet` is read as
+    // ordinary Turmeric there, so treating it as sweet here would make
+    // highlighting disagree with what actually runs. Such a file gets the
+    // sweet reader only by carrying a `#lang` line, same as the toolchain.
+    if (lower.endsWith(".tur.sweet")) return Language::TurmericSweet;
     if (lower.endsWith(".tur") || lower.endsWith(".sweet")) return Language::Turmeric;
     if (lower.endsWith(".md") || lower.endsWith(".markdown")) return Language::Markdown;
     if (lower.endsWith(".json")) return Language::Json;
@@ -167,6 +175,112 @@ Language LanguageForPath(const QString& path) {
         return Language::C;
     }
     return Language::Turmeric;
+}
+
+namespace {
+
+// Map a `#lang` base name to the scanner that should highlight the file.
+//
+// Turmeric has four reader types; Trowel has two scanners for them. The
+// curly-infix and neoteric readers only *enable* syntax that the Turmeric
+// scanner already paints unconditionally (`{a + b}` as CurlyInfix, `f(` as
+// NeotericCall), so they share it. Only the sweet reader adds tokens of its
+// own. Names and the legacy alias track lang_base_from_name() in reader.c.
+bool LanguageForLangBase(const QByteArray& base, Language& out) {
+    if (base == "turmeric" || base == "turmeric/curly-infix"
+        || base == "turmeric/neoteric") {
+        out = Language::Turmeric;
+        return true;
+    }
+    // `turmeric/sweet` is canonical; `sweet-exp` is the legacy alias, still
+    // accepted by the toolchain and still dominant across its own docs.
+    if (base == "turmeric/sweet" || base == "sweet-exp") {
+        out = Language::TurmericSweet;
+        return true;
+    }
+    return false;
+}
+
+// Read a `#lang` directive off the head of `text`, mirroring the accept rules
+// of detect_lang_layered() in reader.c: an optional `#!` shebang line, then
+// leading spaces/tabs (never newlines — the directive must be on line 1),
+// then `#lang`, whitespace, and the base name. Trailing layer tokens
+// (`stringed`, `refined`) do not affect the reader, so they are ignored.
+bool LangDirectiveIn(const QByteArray& text, Language& out) {
+    int i = 0;
+    const int n = text.size();
+
+    if (n >= 2 && text[0] == '#' && text[1] == '!'
+        && (n < 3 || text[2] == '/' || text[2] == ' ' || text[2] == '\t'
+            || text[2] == '\n' || text[2] == '\r')) {
+        const int nl = text.indexOf('\n');
+        if (nl < 0) return false;  // shebang-only file
+        i = nl + 1;
+    }
+
+    while (i < n && (text[i] == ' ' || text[i] == '\t')) ++i;
+    if (text.mid(i, 5) != "#lang") return false;
+    i += 5;
+
+    const int wsStart = i;
+    while (i < n && (text[i] == ' ' || text[i] == '\t')) ++i;
+    if (i == wsStart) return false;  // `#langfoo` is not a directive
+
+    const int baseStart = i;
+    while (i < n && text[i] != ' ' && text[i] != '\t'
+           && text[i] != '\n' && text[i] != '\r') {
+        ++i;
+    }
+    return LanguageForLangBase(text.mid(baseStart, i - baseStart), out);
+}
+
+// Offsets of the `#lang` line within `text`, or false if there isn't one.
+bool LangDirectiveSpan(const QByteArray& text, int& start, int& end) {
+    int i = 0;
+    const int n = text.size();
+
+    if (n >= 2 && text[0] == '#' && text[1] == '!'
+        && (n < 3 || text[2] == '/' || text[2] == ' ' || text[2] == '\t'
+            || text[2] == '\n' || text[2] == '\r')) {
+        const int nl = text.indexOf('\n');
+        if (nl < 0) return false;
+        i = nl + 1;
+    }
+
+    int j = i;
+    while (j < n && (text[j] == ' ' || text[j] == '\t')) ++j;
+    if (text.mid(j, 5) != "#lang") return false;
+
+    start = i;
+    const int nl = text.indexOf('\n', j);
+    end = (nl < 0) ? n : nl + 1;
+    return true;
+}
+
+}
+
+Language LanguageForBuffer(const QString& path, const QByteArray& text) {
+    const Language ext = LanguageForPath(path);
+    // Turmeric's own precedence, from the `load` path in elab_toplevel.c:
+    //   chosen = (ext_type != READER_TURMERIC) ? ext_type : lang_type;
+    // An extension that already names a non-default reader wins and the
+    // directive is a redundant hint; otherwise the directive decides. Applied
+    // only within the Turmeric family — a `#lang` line in a .md or .c file is
+    // just text, and those extensions are not readers at all upstream.
+    if (ext != Language::Turmeric) return ext;
+
+    Language fromDirective = Language::Turmeric;
+    if (LangDirectiveIn(text, fromDirective)) return fromDirective;
+    return ext;
+}
+
+QByteArray LangDirectiveLine(const QByteArray& text) {
+    int start = 0;
+    int end = 0;
+    if (!LangDirectiveSpan(text, start, end)) return {};
+    QByteArray line = text.mid(start, end - start);
+    if (!line.endsWith('\n')) line.append('\n');
+    return line;
 }
 
 // ---------------------------------------------------------------------------
@@ -217,6 +331,7 @@ public:
         case Language::Markdown: return "markdown";
         case Language::Json:     return "json";
         case Language::Just:     return "just";
+        case Language::TurmericSweet: return "turmeric-sweet";
         case Language::Turmeric: break;
         }
         return "turmeric";

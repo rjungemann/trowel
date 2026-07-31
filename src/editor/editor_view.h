@@ -51,8 +51,13 @@ public:
     void setRainbowBrackets(bool enabled);
     bool rainbowBrackets() const { return rainbow_; }
 
-    // Language this buffer is highlighted as, derived from its path.
+    // Language this buffer is highlighted as, derived from its path and any
+    // `#lang` directive it carries.
     Language language() const { return language_; }
+
+    // This buffer's `#lang` line, newline-terminated, or empty. Used to keep
+    // the directive attached when only part of the buffer is run.
+    QByteArray langDirectiveLine() const;
 
     // Default rainbow-bracket preference, read from QSettings.
     static bool rainbowBracketsDefault();
@@ -104,6 +109,13 @@ private:
     void setPath(const QString& path);
     // Install a lexer for the current language + rainbow setting and re-lex.
     void installLexer();
+    // Re-derive the language from the path plus a `#lang` line and re-lex if
+    // it changed. Cheap enough to run on every edit.
+    void refreshLanguage();
+    QByteArray languageProbeText() const;
+    // After Enter, carry the previous line's leading whitespace onto the new
+    // one. Only active for languages where indentation is load-bearing.
+    void autoIndentAfterNewline();
     // Connect this buffer to the application-wide language server.
     void attachLanguageServer();
     void clearDiagnosticDecorations();

@@ -20,11 +20,12 @@ QString scratchDir() {
     return dir;
 }
 
+// Scratch-file extension for the buffer's language. `.tur.sweet` is the only
+// suffix the toolchain maps to a non-default reader, and it is what makes a
+// dirty sweet buffer parse as sweet. The buffer's own `#lang` line, when it
+// has one, travels with the contents and covers everything the suffix cannot.
 QString extensionFor(const EditorView* editor) {
-    const QString path = editor->filePath();
-    if (path.endsWith(".tur.sweet")) return ".tur.sweet";
-    if (path.endsWith(".sweet"))     return ".tur.sweet";
-    return ".tur";
+    return editor->language() == Language::TurmericSweet ? ".tur.sweet" : ".tur";
 }
 
 // Escape a filesystem path for embedding in a turmeric string literal.
@@ -123,10 +124,19 @@ RunResult RunRange(EditorView* editor, ReplSession* repl, int startPos, int endP
         r.message = "Empty selection.";
         return r;
     }
-    const QByteArray contents = editor->textInRange(startPos, endPos);
+    QByteArray contents = editor->textInRange(startPos, endPos);
     if (contents.isEmpty()) {
         r.message = "Empty selection.";
         return r;
+    }
+    // A selection from mid-buffer leaves the `#lang` line behind, which would
+    // run the region under a different reader than the one it was written for.
+    // The extension carries the sweet base, but nothing else — not the layers,
+    // not the neoteric/curly-infix bases — so re-attach the line itself unless
+    // the selection already starts at the top of the file.
+    if (startPos > 0) {
+        const QByteArray directive = editor->langDirectiveLine();
+        if (!directive.isEmpty()) contents.prepend(directive);
     }
     return writeScratchAndLoad(repl, contents, extensionFor(editor));
 }
