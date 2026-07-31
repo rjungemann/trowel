@@ -6,6 +6,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 <!-- New releases are inserted immediately below this comment. -->
 
+## [0.1.2] -- 2026-07-31
+
+### Added
+- **Vertical toolbar** -- the horizontal toolbar is now a vertical icon bar down the left edge of the window, with the settings menu at its foot. Buttons are flat, carry their action's tooltip, and grey out with it.
+- **Build Project** -- a `build.tur` manifest describes a project, not a script, so **Run > Build Project** runs `tur build` as a child process and echoes its output into the same terminal as the REPL.
+- **Sweet-expression support** -- `.tur.sweet` files get their own indentation-aware highlighting, and `#lang` lines are honoured the way the toolchain honours them.
+- **More languages highlighted** -- Python, shell, TOML, and CMake each get a real scanner, joining Turmeric, C, JSON, Markdown, and Justfiles. The dark theme was extended to cover them.
+
+### Changed
+- **Evaluation is gated by file type** -- Run/evaluate is a Turmeric-only action, so non-Turmeric documents grey it out, and opening or saving-as a `build.tur` retargets Run at the project build instead of loading the manifest into the REPL.
+
 ## [0.1.1] -- 2026-07-27
 
 ### Fixed

@@ -5,7 +5,7 @@ programming language, for macOS and Linux.
 
 <img src="docs/images/screenshot.png" alt="Trowel editing a Turmeric source file" width="400">
 
-**Latest release:** `v0.1.1` — fixes a crash when closing a window.
+**Latest release:** `v0.1.2` — moves the toolbar to a vertical icon bar, adds project builds via `build.tur`, and highlights sweet-expressions, Python, shell, TOML, and CMake.
 
 ## Install
 
