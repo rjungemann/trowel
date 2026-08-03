@@ -6,10 +6,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 <!-- New releases are inserted immediately below this comment. -->
 
-## [Unreleased]
+## [0.1.3] -- 2026-08-02
 
 ### Changed
-- **Bundled Turmeric v0.33.2** -- updated the embedded `tur` compiler/REPL from v0.32.6.
+- **Bundled Turmeric v0.33.2** -- updated the embedded `tur` compiler/REPL from v0.32.6. Refinement types graduated out of `--enable=refined` and are now discharged statically on every compile, `#writes` write frames arrived behind `--enable=write-frames`, and the interpreter now copies by-value struct arguments so `turi` and the compiled backend agree on the same program.
 
 ## [0.1.2] -- 2026-07-31
 

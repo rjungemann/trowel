@@ -5,7 +5,7 @@ programming language, for macOS and Linux.
 
 <img src="docs/images/screenshot.png" alt="Trowel editing a Turmeric source file" width="400">
 
-**Latest release:** `v0.1.2` — moves the toolbar to a vertical icon bar, adds project builds via `build.tur`, and highlights sweet-expressions, Python, shell, TOML, and CMake.
+**Latest release:** `v0.1.3` — bundles Turmeric v0.33.2, whose refinement types are now checked statically on every compile.
 
 ## Install
 
