@@ -22,10 +22,25 @@ overview of the whole buffer with a draggable viewport slider. Off by default be
 - **Folding is off.** `ScannerLexer::Fold()` is a no-op and the fold margin is 0px
   wide, so no line is ever hidden.
 
-Those last two eliminate the two hardest sync problems a minimap normally has. They
-are invariants worth defending: the geometry layer below routes every doc-line ↔ y
-conversion through two functions so that turning wrap on later is a localized change
-(`visibleFromDocLine`/`docLineFromVisible`) rather than a rewrite.
+Those last two eliminate the two hardest sync problems a minimap normally has — but
+they are *current conditions, not commitments*. Word wrap and folding are both
+plausible future features of the editor, and **nothing here may be built in a way that
+precludes them.** That is a constraint on everything below, not an aspiration:
+
+- Every doc-line ↔ y conversion goes through `docLineForY`/`yForDocLine`. Enabling
+  wrap or folding then means reimplementing two functions over
+  `SCI_VISIBLEFROMDOCLINE` / `SCI_DOCLINEFROMVISIBLE`, not rewriting the widget.
+  Nothing else may do its own line↔pixel arithmetic.
+- Where this plan says "line" in a *geometry* context, read **display line**; where it
+  means a position in the buffer, read **document line**. They are equal today and
+  will not be later. The strip cache is deliberately keyed on document lines (stable
+  under wrap and folding) while the mapping layer deals in display lines.
+- Prefer Scintilla APIs that already speak display lines (`SCI_LINESCROLL`,
+  `SCI_SETFIRSTVISIBLELINE`, `linesOnScreen()`) over hand-rolled `line * lineHeight`
+  arithmetic, which silently bakes in the 1:1 assumption.
+
+"This only works because wrap is off" should read as a defect in review, even while
+wrap is off.
 
 The other load-bearing fact: **Trowel's lexer already stores per-line lexer state in
 Scintilla's line state** (`PackLexState`/`UnpackLexState` in
@@ -40,6 +55,8 @@ off-thread minimap rendering tractable. See [Phase 3](#phase-3--off-thread-rende
 - A viewport slider overlay; click to jump, drag to scroll, wheel to scroll the editor.
 - Stays responsive on multi-megabyte files: no full-document render, ever.
 - Theme-driven colors; a preference to toggle it, choose the side, and set the width.
+- Leaves the door open for word wrap and folding: supporting them is out of scope here,
+  precluding them is not acceptable.
 
 Non-goals for this iteration: hover-preview magnification, search-hit marks,
 git-change gutter, sticky-scroll header, "render actual glyphs" mode, per-tab
@@ -96,6 +113,12 @@ The alternative — compress `lineH` so the entire file always fits — is tempt
 and re-renders the entire cache whenever the window resizes. Proportional slide keeps
 cell geometry constant, which is what makes the cache row-addressable. Take the
 trade: at very large files you see a window of the file, not all of it.
+
+`totalLines` in both regimes is a **display**-line count. It equals `lineCount()`
+today; under wrap or folding it is `SCI_VISIBLEFROMDOCLINE(lineCount())`. Read it
+through one accessor (`displayLineCount()`) rather than calling `lineCount()` at each
+site, so there is a single place to change and no site that quietly means the wrong
+one. The strip cache is unaffected either way — strips are keyed on document lines.
 
 ### Cache: lazily-rendered strips
 
@@ -167,6 +190,12 @@ the moment Scintilla styles it (which invalidates the strip anyway).
 - **Click** anywhere → center the editor viewport on `docLineForY(y)` via
   `sci_->setFirstVisibleLine(line - linesOnScreen()/2)`. Granularity is one line;
   Scintilla exposes no sub-line vertical scroll, and at 2px/line that is invisible.
+  Note the type mismatch waiting here: `SCI_SETFIRSTVISIBLELINE` takes a *display*
+  line ("the value is a visible line rather than a document line" — `ScintillaDoc`)
+  while `docLineForY` returns a *document* line. They coincide today, so this call and
+  the drag handler below need `visibleFromDocLine()` wrapped around the argument the
+  day wrap or folding is enabled. `SCI_LINESCROLL` (wheel, below) is already in
+  display lines and needs no change.
 - **Press inside the slider** → begin drag, remembering the grab offset so the slider
   does not jump under the cursor. `mouseMoveEvent` maps y back to a first-visible-line
   and sets it. `mouseReleaseEvent` ends the drag.
@@ -199,9 +228,17 @@ the moment Scintilla styles it (which invalidates the strip anyway).
 `minimap_->invalidateLines(sci_->lineFromPosition(position), -1)`. Render is debounced
 by a 60 ms single-shot `QTimer` so a burst of keystrokes yields one repaint.
 
-**Fold/wrap:** both off today. All conversions go through `docLineForY`/`yForDocLine`,
-which are the identity over doc lines now. If wrap is ever enabled they become
-`docLineFromVisible`/`visibleFromDocLine` calls and nothing else moves.
+**Fold/wrap:** both off today, and this table is written so that neither stays that way
+by accident. All conversions go through `docLineForY`/`yForDocLine`, which are the
+identity over doc lines now; enabling either turns them into
+`docLineFromVisible`/`visibleFromDocLine` calls and nothing else in the sync path
+moves. The one genuinely new row needed on that day: folding and wrap re-layout change
+the display-line count *without* any text change, so neither `modified`
+(Insert/DeleteText) nor `linesAdded` fires and the mapping would go stale. Folding
+surfaces as `modified` with `SC_MOD_CHANGEFOLD` — currently filtered out — and wrap
+re-layout as a viewport change after resize. Neither invalidates a *strip*; the cache
+is document-line-keyed, which is precisely why it survives both. Only the mapping is
+re-derived.
 
 ## Decorations
 
@@ -320,10 +357,13 @@ private:
     // The whole doc-line <-> pixel mapping funnels through these two. Wrap and
     // folding are both off today so they are the identity over document lines;
     // if either is ever enabled they become docLineFromVisible/visibleFromDocLine
-    // and nothing else in this class has to change.
+    // and nothing else in this class has to change. That property is the point:
+    // no other member may do its own line<->pixel arithmetic, however tempting,
+    // because doing so is what would preclude ever turning wrap or folding on.
     int docLineForY(int y) const;
     int yForDocLine(int line) const;
 
+    int displayLineCount() const;           // == lineCount() only while wrap/fold off
     int topDocLine() const;                 // proportional-slide anchor
     QRect sliderRect() const;
     void scrollEditorToY(int y, bool center);
@@ -424,6 +464,12 @@ until minimap drag has proven itself).
 - **Proportional slide surprises people** who expect the whole file. It is the VSCode
   behavior and the right default; note it in the smoke-test doc so it is not filed as
   a bug.
+- **Silently baking in "wrap and folding are off."** The 1:1 document↔display line
+  assumption creeps back one `line * linePx_` at a time, and nothing fails — until the
+  day either feature ships, when the minimap is subtly wrong everywhere and the cause
+  is smeared across the file. No test can catch this today, because today the
+  assumption is true. It is a review checklist item and the reason the mapping is
+  funneled through two functions and the line count through one accessor.
 
 ## Verification
 

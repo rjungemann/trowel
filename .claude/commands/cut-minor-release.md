@@ -46,8 +46,16 @@ Example: `0.1.4` -> `0.2.0`.
 
 ## Step 2: Draft the CHANGELOG entry
 
-Run `git log <lastTag>..HEAD --pretty=format:'%h %s'` (or full log for
-the first release) to get the commit list since the last tag.
+First read `CHANGELOG.md` and look for a `## [Unreleased]` section just
+below the insertion marker. If one is there, its bullets were written by
+hand for changes the commit log describes poorly, and they take
+precedence over anything you would derive from the commits for that same
+change. Fold them into the entry you draft, keeping their wording and
+subsection. Step 5 then replaces the section outright -- do not leave it
+sitting below the release you insert.
+
+Then run `git log <lastTag>..HEAD --pretty=format:'%h %s'` (or full log
+for the first release) to get the commit list since the last tag.
 
 Classify each commit into one of:
 - **Added** -- new features, new views, new commands
@@ -55,7 +63,17 @@ Classify each commit into one of:
 - **Fixed** -- bug fixes (commits starting with `fix:`, "fix", or referencing a bug)
 - **Removed** -- deletions of features or APIs
 - **Docs** -- documentation-only changes (only include if non-trivial)
-- **Internal** -- skip from changelog (CI, refactors with no user-visible effect, dependency bumps)
+- **Internal** -- skip from changelog (CI, refactors with no user-visible effect, most dependency bumps)
+
+One dependency is not internal: `TROWEL_TURMERIC_VERSION` in
+`CMakeLists.txt` pins the `tur` toolchain that ships inside the app, so
+bumping it changes the compiler/REPL users actually get. Record it under
+**Changed**, following the shape of past entries:
+
+```
+- **Bundled Turmeric v<NEW>** -- updated the embedded `tur` compiler/REPL
+  from v<OLD>. <one clause on what the new toolchain brings>
+```
 
 Skim each commit's subject line and, when ambiguous, run
 `git show --stat <sha>` to see what files changed. Don't include every
@@ -107,6 +125,8 @@ Show the user:
 - The full CHANGELOG entry you drafted
 - The new README "Latest release" line
 - The list of commits that informed the changelog
+- Whether an `[Unreleased]` section was folded in, and which bullets
+  came from it
 
 Use `AskUserQuestion` with options:
 - **Proceed**: continue with steps 5-8 as drafted
@@ -123,7 +143,10 @@ In parallel:
 2. Edit `CHANGELOG.md` -- insert the new entry immediately after the
    `<!-- New releases are inserted immediately below this comment. -->`
    marker and before any existing `## [<OLD>]` entry. Keep one blank
-   line between entries.
+   line between entries. If a `## [Unreleased]` section is sitting
+   there, replace it rather than inserting above it -- Step 2 already
+   folded its bullets into the new entry, so leaving it would strand a
+   duplicate below the release.
 3. Edit `README.md` -- replace the `**Latest release:**` line.
 
 After applying, run `git diff --stat` and show the user what changed.
