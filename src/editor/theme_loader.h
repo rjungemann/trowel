@@ -35,6 +35,11 @@ struct Theme {
     QColor diagnosticError;
     QColor diagnosticWarning;
 
+    // Debugger gutter markers and the current-execution-line tint.
+    QColor debugBreakpoint;
+    QColor debugBreakpointDisabled;
+    QColor debugCurrentLine;
+
     // Wash painted over every occurrence of the symbol at the caret. Falls back
     // to selectionBg at low alpha when a theme omits it, so existing user theme
     // files keep working.

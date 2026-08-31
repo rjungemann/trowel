@@ -61,6 +61,18 @@ namespace bracketguide {
 constexpr int kIndicator = 12;
 }
 
+// Debugger markers. Markers 0-1 are diagnostics, 25-31 are folding, so 2-6 are
+// free. The breakpoint margin is a dedicated margin (kBreakpointMargin = 3)
+// so click-to-toggle does not steal clicks from the diagnostic symbol margin,
+// and the two decorations stop competing for 12px.
+namespace dbg {
+constexpr int kBreakpointMarker = 2;
+constexpr int kBreakpointDisabledMarker = 3;
+constexpr int kCurrentLineMarker = 4;
+constexpr int kSelectedFrameMarker = 5;
+constexpr int kBreakpointMargin = 3;
+}
+
 class EditorView : public TabContent {
     Q_OBJECT
 public:
@@ -128,6 +140,26 @@ public:
     // Message of the first diagnostic covering `pos`, or empty. Used for the
     // status-bar readout as the caret moves.
     QString diagnosticMessageAt(int pos) const;
+
+    // --- Debugger ---
+    // One breakpoint mark to paint in the gutter. `line` is 1-based; `enabled`
+    // false draws a hollow marker; `pending` true (not yet verified by the
+    // adapter) draws a hollow marker too, so the send-timing delay is visible
+    // rather than mysterious (constraint 6: mid-run setBreakpoints is not
+    // processed until the next stop).
+    struct BreakpointMark {
+        int line = 0;
+        bool enabled = true;
+        bool pending = false;
+    };
+    // Replace all breakpoint markers in this buffer. Clears the previous set
+    // first, mirroring setDiagnostics.
+    void setBreakpointMarkers(const QVector<BreakpointMark>& marks);
+    // Paint the current-execution line (frame 0) or a selected frame. `line`
+    // is 1-based; `isTopFrame` true uses the current-line marker, false the
+    // selected-frame marker (visually distinct). Reveals the line.
+    void setExecutionLine(int line, bool isTopFrame);
+    void clearExecutionLine();
 
     // Show an LSP completion list. Labels are sorted here rather than by the
     // caller — Scintilla requires a sorted list unless told otherwise.
@@ -247,6 +279,10 @@ signals:
     // The rename input was confirmed with Enter, or dismissed with Escape.
     void renameCommitted(const QString& newName);
     void renameCancelled();
+    // The user clicked the breakpoint margin at `line` (1-based). MainWindow
+    // toggles the breakpoint in the model; the model's `changed` signal flows
+    // back here as a new set of markers.
+    void breakpointToggleRequested(int line);
 
 protected:
     // Watches the rename input for Escape and focus loss.

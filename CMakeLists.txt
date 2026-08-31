@@ -34,6 +34,8 @@ add_library(trowel_lib STATIC
     src/app/main_window.h
     src/app/preferences_view.cpp
     src/app/preferences_view.h
+    src/app/repl_pane.cpp
+    src/app/repl_pane.h
     src/app/single_instance.cpp
     src/app/single_instance.h
     src/app/tab_bar.cpp
@@ -87,6 +89,14 @@ add_library(trowel_lib STATIC
     src/control/control_connection.h
     src/control/control_handlers.cpp
     src/control/control_handlers.h
+    src/debug/dap_client.cpp
+    src/debug/dap_client.h
+    src/debug/breakpoint_model.cpp
+    src/debug/breakpoint_model.h
+    src/debug/debug_session.cpp
+    src/debug/debug_session.h
+    src/debug/debugger_view.cpp
+    src/debug/debugger_view.h
     ${TROWEL_RESOURCES}
 )
 target_include_directories(trowel_lib PUBLIC src)

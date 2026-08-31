@@ -225,6 +225,11 @@ Theme LoadBuiltinDarkTheme() {
     t.diagnosticError   = parseColor(diagnostics.value("error"),   QColor("#D9735A"));
     t.diagnosticWarning = parseColor(diagnostics.value("warning"), QColor("#EFA030"));
 
+    const QJsonObject dbg = root.value("debugger").toObject();
+    t.debugBreakpoint         = parseColor(dbg.value("breakpoint"),          QColor("#D48B1C"));
+    t.debugBreakpointDisabled = parseColor(dbg.value("breakpointDisabled"), QColor("#7A6A55"));
+    t.debugCurrentLine        = parseColor(dbg.value("currentLine"),         QColor("#D48B1C33"));
+
     // Falls back to the selection colour at a lower alpha, so a theme file
     // written before occurrence highlighting existed still gets a sane wash
     // instead of an invisible or garish one. A wash rather than a fill: the
@@ -311,6 +316,21 @@ void ApplyThemeToEditor(ScintillaEdit* sci, const Theme& theme) {
     sci->markerSetFore(diag::kWarningMarker, bgra(theme.diagnosticWarning));
     sci->markerSetBack(diag::kWarningMarker, bgra(theme.diagnosticWarning));
     sci->setMarginBackN(1, bgra(theme.editorBg));
+
+    // Debugger gutter markers. The breakpoint marker is a filled circle
+    // (fore = fill, back = editor bg so it reads as a dot, not a block); the
+    // disabled/pending marker is hollow (back = editor bg, fore = the dim
+    // outline). The current-line marker tints the whole line as a background
+    // and draws a short arrow in the breakpoint margin.
+    sci->markerSetFore(dbg::kBreakpointMarker, bgra(theme.debugBreakpoint));
+    sci->markerSetBack(dbg::kBreakpointMarker, bgra(theme.debugBreakpoint));
+    sci->markerSetFore(dbg::kBreakpointDisabledMarker, bgra(theme.debugBreakpointDisabled));
+    sci->markerSetBack(dbg::kBreakpointDisabledMarker, bgra(theme.editorBg));
+    sci->markerSetFore(dbg::kCurrentLineMarker, bgra(theme.debugCurrentLine));
+    sci->markerSetBack(dbg::kCurrentLineMarker, bgra(theme.debugCurrentLine));
+    sci->markerSetFore(dbg::kSelectedFrameMarker, bgra(theme.debugCurrentLine));
+    sci->markerSetBack(dbg::kSelectedFrameMarker, bgra(theme.editorBg));
+    sci->setMarginBackN(dbg::kBreakpointMargin, bgra(theme.editorBg));
 
     // Occurrences: a translucent rounded box under the text, not a squiggle.
     // Painted under the text so the syntax colours stay on top and readable.

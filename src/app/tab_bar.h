@@ -22,10 +22,18 @@ public:
     // a definition jump). Drawn as a label suffix, exactly like the
     // modified-dot, so the two compose without fighting over the same space.
     void setReadOnly(int index, bool readOnly);
+    // Whether a tab shows a close glyph and emits closeRequested. Default true
+    // (document tabs); the REPL-pane bar sets it false for its fixed tabs.
+    void setClosable(int index, bool closable);
     void setTooltip(int index, const QString& tip);
 
     void setColors(const QColor& bg, const QColor& fg, const QColor& divider);
     void setActiveFg(const QColor& fg);
+    // Which edge the 1px divider rule is drawn on. Default Top (document tabs,
+    // which sit above their content); a bottom-mounted pane bar sets Bottom so
+    // the rule sits on top of the pane rather than under it.
+    enum class DividerEdge { Top, Bottom };
+    void setDividerEdge(DividerEdge edge);
 
 signals:
     void activateRequested(int index);
@@ -62,6 +70,7 @@ private:
     std::vector<TabGeom> geoms_;
     std::vector<bool> modified_;
     std::vector<bool> readOnly_;
+    std::vector<bool> closable_;
     QStringList names_;
     QStringList tooltips_;
     int active_ = -1;
@@ -72,6 +81,7 @@ private:
     QColor fg_;
     QColor activeFg_;
     QColor divider_;
+    DividerEdge dividerEdge_ = DividerEdge::Top;
     int scrollOffset_ = 0;
 };
 

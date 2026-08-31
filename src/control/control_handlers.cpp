@@ -3,6 +3,8 @@
 #include "control/control_connection.h"
 #include "app/main_window.h"
 #include "app/window_manager.h"
+#include "debug/breakpoint_model.h"
+#include "debug/debug_session.h"
 #include "editor/editor_view.h"
 #include "lsp/lsp_manager.h"
 #include "repl/repl_session.h"
@@ -1053,6 +1055,105 @@ void HandleRunSelection(MainWindow* w, const QJsonObject&, const Reply& reply) {
     reply(Ok(), nullptr);
 }
 
+// --- Debug --------------------------------------------------------------
+
+void HandleDebugStart(MainWindow* w, const QJsonObject& args, const Reply& reply) {
+    // `stop_on_entry` defaults false: phase 1 is "run with captured output",
+    // not a paused stepping session. The smoke test sets it true to exercise
+    // the paused path without depending on breakpoints (phase 3).
+    const bool stopOnEntry = args.value("stop_on_entry").toBool(false);
+    EditorView* e = RequireEditor(w, reply);
+    if (!e) return;
+    if (EvalModeForPath(e->filePath()) != EvalMode::Buffer) {
+        ReplyErr(reply, "not_debuggable", "the active buffer is not a Turmeric script");
+        return;
+    }
+    // debugBuffer() reads this member to decide whether to stop at entry.
+    // Set it before the queued invocation so the session launches with it.
+    w->setDebugStopOnEntry(stopOnEntry);
+    QMetaObject::invokeMethod(w, "debugBuffer", Qt::QueuedConnection);
+    reply(Ok(), nullptr);
+}
+
+void HandleDebugStop(MainWindow* w, const QJsonObject&, const Reply& reply) {
+    DebugSession* d = w->debugSession();
+    if (!d) { ReplyErr(reply, "no_debug", "no debug session is running"); return; }
+    d->stop();
+    reply(Ok(), nullptr);
+}
+
+void HandleDebugStatus(MainWindow* w, const QJsonObject&, const Reply& reply) {
+    DebugSession* d = w->debugSession();
+    QJsonObject o;
+    if (!d) {
+        o["running"] = false;
+        o["state"] = "idle";
+        reply(o, nullptr);
+        return;
+    }
+    o["running"] = d->isRunning();
+    static const char* kStates[] = {"idle","starting","configuring","running","paused","terminated"};
+    const int idx = static_cast<int>(d->state());
+    o["state"] = (idx >= 0 && idx <= 5) ? QString(kStates[idx]) : QStringLiteral("unknown");
+    o["exit_code"] = d->exitCode();
+    o["output"] = d->output();
+    reply(o, nullptr);
+}
+
+void HandleDebugContinue(MainWindow* w, const QJsonObject&, const Reply& reply) {
+    DebugSession* d = w->debugSession();
+    if (!d) { ReplyErr(reply, "no_debug", "no debug session is running"); return; }
+    d->resume();
+    reply(Ok(), nullptr);
+}
+
+void HandleDebugStep(MainWindow* w, const QJsonObject& args, const Reply& reply) {
+    DebugSession* d = w->debugSession();
+    if (!d) { ReplyErr(reply, "no_debug", "no debug session is running"); return; }
+    const QString kind = args.value("kind").toString("over");
+    if (kind == "in") d->stepIn();
+    else if (kind == "out") d->stepOut();
+    else d->stepOver();
+    reply(Ok(), nullptr);
+}
+
+void HandleDebugBreakpointToggle(MainWindow* w, const QJsonObject& args, const Reply& reply) {
+    BreakpointModel* m = w->breakpointModel();
+    if (!m) { ReplyErr(reply, "no_model", "breakpoint model not initialized"); return; }
+    const QString path = args.value("path").toString();
+    const int line = args.value("line").toInt(0);
+    if (path.isEmpty() || line < 1) {
+        ReplyErr(reply, "bad_args", "need `path` and 1-based `line`");
+        return;
+    }
+    m->toggle(path, line);
+    // Report whether the breakpoint now exists (added) rather than whether
+    // the set changed — toggle returns true for both add and remove.
+    bool nowExists = false;
+    for (const auto& bp : m->forFile(path)) {
+        if (bp.line == line) { nowExists = true; break; }
+    }
+    QJsonObject o; o["added"] = nowExists; o["line"] = line;
+    reply(o, nullptr);
+}
+
+void HandleDebugBreakpoints(MainWindow* w, const QJsonObject& args, const Reply& reply) {
+    BreakpointModel* m = w->breakpointModel();
+    if (!m) { ReplyErr(reply, "no_model", "breakpoint model not initialized"); return; }
+    const QString path = args.value("path").toString();
+    QJsonArray arr;
+    for (const auto& bp : (path.isEmpty() ? m->breakpoints() : m->forFile(path))) {
+        QJsonObject o;
+        o["path"] = bp.path;
+        o["line"] = bp.line;
+        o["enabled"] = bp.enabled;
+        o["condition"] = bp.condition;
+        arr.append(o);
+    }
+    QJsonObject out; out["breakpoints"] = arr;
+    reply(out, nullptr);
+}
+
 // --- Waiters ------------------------------------------------------------
 
 void HandleWaitReplOutput(MainWindow* w, QPointer<ControlConnection> conn,
@@ -1260,6 +1361,14 @@ void Dispatch(WindowManager* windows, QPointer<ControlConnection> conn,
     if (cmd == "repl.is_running")      { HandleReplIsRunning(w, args, reply); return; }
     if (cmd == "run.buffer")           { HandleRunBuffer(w, args, reply); return; }
     if (cmd == "run.selection")        { HandleRunSelection(w, args, reply); return; }
+
+    if (cmd == "debug.start")          { HandleDebugStart(w, args, reply); return; }
+    if (cmd == "debug.stop")           { HandleDebugStop(w, args, reply); return; }
+    if (cmd == "debug.status")         { HandleDebugStatus(w, args, reply); return; }
+    if (cmd == "debug.continue")       { HandleDebugContinue(w, args, reply); return; }
+    if (cmd == "debug.step")           { HandleDebugStep(w, args, reply); return; }
+    if (cmd == "debug.breakpoint.toggle") { HandleDebugBreakpointToggle(w, args, reply); return; }
+    if (cmd == "debug.breakpoints")    { HandleDebugBreakpoints(w, args, reply); return; }
 
     if (cmd == "wait.repl_output")     { HandleWaitReplOutput(w, conn, args, reply); return; }
     if (cmd == "wait.repl_idle")       { HandleWaitReplIdle(w, conn, args, reply); return; }

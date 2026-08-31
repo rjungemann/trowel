@@ -25,9 +25,12 @@ class QStackedWidget;
 
 namespace trowel {
 
+class BreakpointModel;
+class DebugSession;
 class DirectoryView;
 class EditorView;
 class ProjectRunner;
+class ReplPane;
 class TraceRunner;
 class ReplSession;
 class TabBar;
@@ -74,6 +77,12 @@ public:
     QStringList tabPaths() const;
     TerminalView* terminalView() const { return terminal_; }
     ReplSession* replSession() const { return repl_; }
+    DebugSession* debugSession() const { return debug_; }
+    BreakpointModel* breakpointModel() const { return breakpoints_; }
+    ReplPane* replPane() const { return replPane_; }
+    // Set before invoking debugBuffer() to control whether the next session
+    // stops at the entry frame. Reset to false after each launch.
+    void setDebugStopOnEntry(bool stop) { debugStopOnEntry_ = stop; }
     QSplitter* splitter() const { return splitter_; }
 
     // The registry this window belongs to, set by WindowManager::createWindow().
@@ -159,6 +168,10 @@ private slots:
     void runProject();
 
     void runSelection();
+    // Launch the active buffer under the interpreter debugger (`tur dap`).
+    // A debug session is a separate sibling process from the REPL (there is
+    // no `attach`), so anything loaded into the REPL is not visible to it.
+    void debugBuffer();
     void formatFile();
     void requestCompletion();
     void showDocumentation();
@@ -262,6 +275,11 @@ private:
     EvalMode currentEvalMode() const;
     int nextUntitledIndex() const;
     void refreshTabBar();
+    // Repaint breakpoint gutter markers for the editor showing `path` (or all
+    // editors when `path` is empty), driven by BreakpointModel::changed.
+    void refreshBreakpointMarkers(const QString& path);
+    // Push the program file's breakpoints to the live debug session.
+    void pushBreakpointsToSession();
     QString computeDisplayName(const Buffer& buf) const;
     void updateBufferDisplayName(int index);
     Buffer* addBuffer(const QString& path, bool untitledIfEmpty);
@@ -279,7 +297,11 @@ private:
     QStackedWidget* editorStack_ = nullptr;
     TabBar* tabBar_ = nullptr;
     TerminalView* terminal_ = nullptr;
+    ReplPane* replPane_ = nullptr;
     ReplSession* repl_ = nullptr;
+    DebugSession* debug_ = nullptr;
+    BreakpointModel* breakpoints_ = nullptr;
+    bool debugStopOnEntry_ = false;
     QSplitter* splitter_ = nullptr;
     QMenu* recentMenu_ = nullptr;
     QMenu* windowMenu_ = nullptr;
@@ -302,6 +324,7 @@ private:
     QAction* findReferencesAction_ = nullptr;
     QAction* renameAction_ = nullptr;
     QAction* traceAction_ = nullptr;
+    QAction* debugAction_ = nullptr;
     // Backing store for the references chooser: the rows shown are strings, so
     // the spans they stand for have to live somewhere the selection can reach.
     QVector<LspSpan> referenceSpans_;

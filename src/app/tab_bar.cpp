@@ -57,6 +57,7 @@ void TabBar::setTabs(const QStringList& displayNames, int activeIndex) {
     for (int i = 0; i < names_.size(); ++i) tooltips_.append(QString());
     modified_.assign(names_.size(), false);
     readOnly_.assign(names_.size(), false);
+    closable_.assign(names_.size(), true);
     active_ = activeIndex;
     if (hovered_ >= names_.size()) hovered_ = -1;
     relayout();
@@ -85,6 +86,20 @@ void TabBar::setReadOnly(int index, bool readOnly) {
     if (readOnly_[index] == readOnly) return;
     readOnly_[index] = readOnly;
     relayout();
+    update();
+}
+
+void TabBar::setClosable(int index, bool closable) {
+    if (index < 0 || index >= static_cast<int>(closable_.size())) return;
+    if (closable_[index] == closable) return;
+    closable_[index] = closable;
+    relayout();
+    update();
+}
+
+void TabBar::setDividerEdge(DividerEdge edge) {
+    if (dividerEdge_ == edge) return;
+    dividerEdge_ = edge;
     update();
 }
 
@@ -117,8 +132,11 @@ void TabBar::relayout() {
         if (i < static_cast<int>(modified_.size()) && modified_[i]) {
             label += QStringLiteral(" •");
         }
+        const bool closable = (i < static_cast<int>(closable_.size()))
+            ? closable_[i] : true;
+        const int closeSlot = closable ? kCloseSlot : 0;
         int textW = fm.horizontalAdvance(label);
-        int w = textW + kHPad * 2 + kCloseSlot;
+        int w = textW + kHPad * 2 + closeSlot;
         bool elided = false;
         if (w > kMaxTabWidth) {
             w = kMaxTabWidth;
@@ -126,9 +144,9 @@ void TabBar::relayout() {
         }
         TabGeom g;
         g.rect = QRect(x, 0, w, h);
-        g.closeRect = QRect(x + w - kCloseSlot, 0, kCloseSlot, h);
+        g.closeRect = QRect(x + w - closeSlot, 0, closeSlot, h);
         if (elided) {
-            const int textArea = w - kHPad * 2 - kCloseSlot;
+            const int textArea = w - kHPad * 2 - closeSlot;
             g.label = fm.elidedText(label, Qt::ElideMiddle, textArea);
         } else {
             g.label = label;
@@ -151,6 +169,9 @@ int TabBar::tabAt(const QPoint& p) const {
 
 bool TabBar::closeHit(int index, const QPoint& p) const {
     if (index < 0 || index >= static_cast<int>(geoms_.size())) return false;
+    const bool closable = (index < static_cast<int>(closable_.size()))
+        ? closable_[index] : true;
+    if (!closable) return false;
     const QPoint q(p.x() + scrollOffset_, p.y());
     const QRect& cr = geoms_[index].closeRect;
     // Approximate the glyph hit box: an 16x16 square centered vertically,
@@ -192,9 +213,15 @@ void TabBar::paintEvent(QPaintEvent*) {
     QPainter p(this);
     p.fillRect(rect(), bg_);
 
-    // Bottom 1px border.
+    // 1px border on the edge away from the content. Document tabs sit above
+    // their content, so the rule is on the bottom; a bottom-mounted pane bar
+    // puts the rule on top so it reads as the pane's top edge.
     p.setPen(divider_);
-    p.drawLine(0, height() - 1, width(), height() - 1);
+    if (dividerEdge_ == DividerEdge::Bottom) {
+        p.drawLine(0, 0, width(), 0);
+    } else {
+        p.drawLine(0, height() - 1, width(), height() - 1);
+    }
 
     p.translate(-scrollOffset_, 0);
 
@@ -212,16 +239,20 @@ void TabBar::paintEvent(QPaintEvent*) {
                        g.rect.right(), height() - kDividerMarginY - 1);
         }
 
-        // Label: centered in the text area (excluding close slot).
-        QRect textRect = g.rect.adjusted(kHPad, 0, -kCloseSlot, -2);
+        const bool closable = (i < static_cast<int>(closable_.size()))
+            ? closable_[i] : true;
+        const int closeSlot = closable ? kCloseSlot : 0;
+
+        // Label: centered in the text area (excluding close slot when present).
+        QRect textRect = g.rect.adjusted(kHPad, 0, -closeSlot, -2);
         QFont f = font();
         f.setBold(true);
         p.setFont(f);
         p.setPen(i == active_ ? activeFg_ : fg_);
         p.drawText(textRect, Qt::AlignCenter, g.label);
 
-        // Close glyph, always visible; brightens when hovered directly.
-        {
+        // Close glyph, only on closable tabs; brightens when hovered directly.
+        if (closable) {
             const int size = 18;
             const int cx = g.closeRect.right() - (kCloseGlyphPadRight - 2) - size / 2;
             const int cy = g.closeRect.center().y();

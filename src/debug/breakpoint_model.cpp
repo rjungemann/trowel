@@ -1,0 +1,111 @@
+#include "debug/breakpoint_model.h"
+
+#include <QFileInfo>
+
+namespace trowel {
+
+BreakpointModel::BreakpointModel(QObject* parent)
+    : QObject(parent)
+{}
+
+int BreakpointModel::indexOf(const QString& path, int line) const {
+    for (int i = 0; i < breakpoints_.size(); ++i) {
+        if (breakpoints_[i].path == path && breakpoints_[i].line == line) return i;
+    }
+    return -1;
+}
+
+QVector<BreakpointModel::Breakpoint> BreakpointModel::forFile(const QString& path) const {
+    QVector<Breakpoint> out;
+    for (const Breakpoint& b : breakpoints_) {
+        if (b.path == path) out.append(b);
+    }
+    return out;
+}
+
+bool BreakpointModel::toggle(const QString& path, int line) {
+    const int i = indexOf(path, line);
+    if (i >= 0) {
+        breakpoints_.removeAt(i);
+        emit changed(path);
+        return true;
+    }
+    Breakpoint b;
+    b.path = path;
+    b.line = line;
+    b.enabled = true;
+    breakpoints_.append(b);
+    emit changed(path);
+    return true;
+}
+
+void BreakpointModel::set(const QString& path, int line, bool enabled,
+                          const QString& condition) {
+    const int i = indexOf(path, line);
+    if (i >= 0) {
+        if (breakpoints_[i].enabled == enabled && breakpoints_[i].condition == condition)
+            return;
+        breakpoints_[i].enabled = enabled;
+        breakpoints_[i].condition = condition;
+    } else {
+        Breakpoint b;
+        b.path = path;
+        b.line = line;
+        b.enabled = enabled;
+        b.condition = condition;
+        breakpoints_.append(b);
+    }
+    emit changed(path);
+}
+
+void BreakpointModel::remove(const QString& path, int line) {
+    const int i = indexOf(path, line);
+    if (i < 0) return;
+    breakpoints_.removeAt(i);
+    emit changed(path);
+}
+
+void BreakpointModel::clearFile(const QString& path) {
+    bool didChange = false;
+    for (int i = breakpoints_.size() - 1; i >= 0; --i) {
+        if (breakpoints_[i].path == path) {
+            breakpoints_.removeAt(i);
+            didChange = true;
+        }
+    }
+    if (didChange) emit changed(path);
+}
+
+void BreakpointModel::clear() {
+    if (breakpoints_.isEmpty()) return;
+    breakpoints_.clear();
+    emit changed({});  // empty path = everything changed
+}
+
+void BreakpointModel::setEnabled(const QString& path, int line, bool enabled) {
+    const int i = indexOf(path, line);
+    if (i < 0 || breakpoints_[i].enabled == enabled) return;
+    breakpoints_[i].enabled = enabled;
+    emit changed(path);
+}
+
+void BreakpointModel::setCondition(const QString& path, int line,
+                                   const QString& condition) {
+    const int i = indexOf(path, line);
+    if (i < 0 || breakpoints_[i].condition == condition) return;
+    breakpoints_[i].condition = condition;
+    emit changed(path);
+}
+
+bool BreakpointModel::HasBasenameCollision(const QString& path,
+                                           const QStringList& openPaths) {
+    const QString name = QFileInfo(path).fileName();
+    if (name.isEmpty()) return false;
+    int count = 0;
+    for (const QString& p : openPaths) {
+        if (QFileInfo(p).fileName() == name) ++count;
+    }
+    return count > 1;
+}
+
+}

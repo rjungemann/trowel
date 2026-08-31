@@ -6,6 +6,10 @@
 #include "app/tab_bar.h"
 #include "app/tab_content.h"
 #include "app/window_manager.h"
+#include "app/repl_pane.h"
+#include "debug/breakpoint_model.h"
+#include "debug/debug_session.h"
+#include "debug/debugger_view.h"
 #include "editor/editor_view.h"
 #include "editor/theme_loader.h"
 #include "lsp/lsp_manager.h"
@@ -107,10 +111,14 @@ void MainWindow::setupUi() {
     splitter_ = new QSplitter(Qt::Horizontal, this);
 
     editorStack_ = new QStackedWidget(splitter_);
+    // The terminal is created first so ReplPane can reparent it into its
+    // stack; `terminal_` keeps pointing at the same widget, so every
+    // `repl.*` handler and the control socket keep working untouched.
     terminal_ = new TerminalView(splitter_);
+    replPane_ = new ReplPane(terminal_, splitter_);
 
     splitter_->addWidget(editorStack_);
-    splitter_->addWidget(terminal_);
+    splitter_->addWidget(replPane_);
     splitter_->setChildrenCollapsible(false);
     splitter_->setSizes({700, 500});
 
@@ -277,6 +285,13 @@ void MainWindow::setupMenus() {
     connect(traceAction_, &QAction::triggered, this, &MainWindow::traceBuffer);
     runMenu->addAction(traceAction_);
 
+    debugAction_ = new QAction("&Debug Buffer", this);
+    debugAction_->setShortcut(QKeySequence("F5"));
+    debugAction_->setToolTip(
+        "Run the current file under the interpreter debugger (`tur dap`)");
+    connect(debugAction_, &QAction::triggered, this, &MainWindow::debugBuffer);
+    runMenu->addAction(debugAction_);
+
     runMenu->addSeparator();
 
     restartReplAction_ = new QAction("Res&tart REPL", this);
@@ -429,6 +444,10 @@ void MainWindow::setupToolBar() {
         runSelectionAction_->setIcon(NerdIcon(NF::PlaylistPlay, glyphSize, iconColor));
         addSideBarAction(runSelectionAction_);
     }
+    if (debugAction_) {
+        debugAction_->setIcon(NerdIcon(NF::Play, glyphSize, iconColor));
+        addSideBarAction(debugAction_);
+    }
     if (restartReplAction_) {
         restartReplAction_->setIcon(NerdIcon(NF::Restart, glyphSize, iconColor));
         addSideBarAction(restartReplAction_);
@@ -493,7 +512,9 @@ void MainWindow::setupToolBar() {
 }
 
 void MainWindow::toggleReplVisible(bool visible) {
-    if (terminal_) terminal_->setVisible(visible);
+    // Toggle the whole pane (terminal + debugger + tab bar), not just the
+    // terminal — the pane is now the splitter widget.
+    if (replPane_) replPane_->setVisible(visible);
 }
 
 void MainWindow::toggleSplitOrientation() {
@@ -586,6 +607,47 @@ void MainWindow::refreshTabBar() {
     }
 }
 
+void MainWindow::refreshBreakpointMarkers(const QString& path) {
+    if (!breakpoints_) return;
+    // Repaint markers for the editor showing `path`, or every editor when
+    // `path` is empty (a clear-all). A pending breakpoint is one not yet
+    // verified by the adapter — rendered hollow so the send-timing delay is
+    // visible (constraint 6).
+    const bool live = debug_ && debug_->isRunning();
+    for (const auto& b : buffers_) {
+        if (!b->view || b->view->kind() != TabContent::Kind::Editor) continue;
+        auto* ed = static_cast<EditorView*>(b->view);
+        if (!path.isEmpty() && ed->filePath() != path) continue;
+        QVector<EditorView::BreakpointMark> marks;
+        for (const auto& bp : breakpoints_->forFile(ed->filePath())) {
+            EditorView::BreakpointMark m;
+            m.line = bp.line;
+            m.enabled = bp.enabled;
+            // Pending while a session is live but has not yet acknowledged
+            // this breakpoint (it will after the next stop). Simplified: mark
+            // all pending while running, verified-looking while idle.
+            m.pending = live;
+            marks.append(m);
+        }
+        ed->setBreakpointMarkers(marks);
+    }
+}
+
+void MainWindow::pushBreakpointsToSession() {
+    if (!debug_ || !breakpoints_) return;
+    EditorView* v = editorView();
+    if (!v || v->filePath().isEmpty()) return;
+    QVector<DebugSession::BreakpointSpec> bps;
+    for (const auto& bp : breakpoints_->forFile(v->filePath())) {
+        DebugSession::BreakpointSpec s;
+        s.line = bp.line;
+        s.enabled = bp.enabled;
+        s.condition = bp.condition;
+        bps.append(s);
+    }
+    debug_->setBreakpoints(v->filePath(), bps);
+}
+
 void MainWindow::connectBufferSignals(int index) {
     TabContent* view = buffers_[index]->view;
     connect(view, &TabContent::modifiedChanged, this, [this, view](bool modified) {
@@ -627,6 +689,15 @@ void MainWindow::connectBufferSignals(int index) {
     connect(editor->sciWidget(), &ScintillaEditBase::updateUi, this,
             [this, editor](Scintilla::Update) {
         if (editor == editorView()) updateDiagnosticStatus();
+    });
+    // Click the breakpoint margin to toggle a breakpoint in the model. The
+    // model's `changed` signal flows back to refreshBreakpointMarkers().
+    connect(editor, &EditorView::breakpointToggleRequested, this,
+            [this, editor](int line) {
+        if (!breakpoints_) return;
+        const QString path = editor->filePath();
+        if (path.isEmpty()) return;  // untitled buffers can't bind breakpoints
+        breakpoints_->toggle(path, line);
     });
     // EditorView connects to this signal in its own constructor, so by the time
     // this runs the view has already repainted its indicators.
@@ -950,6 +1021,15 @@ void MainWindow::updateEditorActionsEnabled() {
             mode == EvalMode::Buffer
                 ? QStringLiteral("Evaluate Selection")
                 : QStringLiteral("Evaluation is only available for Turmeric files"));
+    }
+    if (debugAction_) {
+        // Same gate as Run Buffer: a manifest is not a script, and the
+        // interpreter debugger runs a program, not a project description.
+        debugAction_->setEnabled(mode == EvalMode::Buffer);
+        debugAction_->setToolTip(
+            mode == EvalMode::Buffer
+                ? QStringLiteral("Run the current file under the interpreter debugger (`tur dap`)")
+                : QStringLiteral("Debugging is only available for Turmeric files"));
     }
 
     // Trowel highlights nine languages and has a language server for one. F12
@@ -1307,6 +1387,122 @@ void MainWindow::runSelection() {
     const auto [start, end] = v->selectionRange();
     const RunResult r = RunRange(v, repl_, start, end);
     if (!r.ok) statusBar()->showMessage(r.message, 4000);
+}
+
+void MainWindow::debugBuffer() {
+    EditorView* v = editorView();
+    if (!v) return;
+    // The action is greyed out otherwise, but the control socket and any stale
+    // shortcut route here too — so the gate lives here as well.
+    if (EvalModeForPath(v->filePath()) != EvalMode::Buffer) {
+        statusBar()->show();
+        statusBar()->showMessage(
+            "Debugging is only available for Turmeric files.", 4000);
+        return;
+    }
+    // Breakpoints bind by basename (constraint 5) and stack frames carry the
+    // path, so a scratch file with a mangled name would silently fail to bind
+    // breakpoints. Require a saved file, exactly like traceBuffer does.
+    if (v->filePath().isEmpty() || (v->isModified() && !save())) {
+        statusBar()->show();
+        statusBar()->showMessage("Save the file before debugging it.", 4000);
+        return;
+    }
+
+    // One session per window. A live session is stopped first — "restart"
+    // means respawning `tur dap` (one program per session, constraint 3).
+    if (debug_) {
+        debug_->stop();
+        debug_->deleteLater();
+        debug_ = nullptr;
+    }
+
+    debug_ = new DebugSession(this);
+    connect(debug_, &DebugSession::outputReceived, this, [this](const QString& text) {
+        // Stream debuggee output into the Debugger tab's console.
+        if (replPane_ && replPane_->debugger()) replPane_->debugger()->appendOutput(text);
+    });
+    // Toolbar → session. The toolbar lives in the DebuggerView; the session
+    // is owned by the window, so the connection crosses that boundary here.
+    if (replPane_ && replPane_->debugger()) {
+        auto* dv = replPane_->debugger();
+        connect(dv, &DebuggerView::continueRequested, debug_, &DebugSession::resume);
+        connect(dv, &DebuggerView::stepOverRequested, debug_, &DebugSession::stepOver);
+        connect(dv, &DebuggerView::stepInRequested, debug_, &DebugSession::stepIn);
+        connect(dv, &DebuggerView::stepOutRequested, debug_, &DebugSession::stepOut);
+        connect(dv, &DebuggerView::stopRequested, debug_, &DebugSession::stop);
+    }
+    connect(debug_, &DebugSession::pushBreakpointsRequested, this,
+            &MainWindow::pushBreakpointsToSession);
+    connect(debug_, &DebugSession::stateChanged, this, [this](DebugSession::State s) {
+        if (!replPane_ || !replPane_->debugger()) return;
+        // Paused: everything except Stop enabled. Running: only Stop.
+        // Idle/Terminated: everything off.
+        if (s == DebugSession::State::Paused) replPane_->debugger()->setPaused(true);
+        else if (s == DebugSession::State::Running) replPane_->debugger()->setRunning(true);
+        else replPane_->debugger()->setRunning(false);
+    });
+    connect(debug_, &DebugSession::stopped, this, [this](const QString&) {
+        // Highlight the current-execution line in the editor showing the
+        // top frame's file. If the file isn't open, phase 1 simply does not
+        // highlight (auto-opening frames is a phase 5 nicety).
+        if (!debug_) return;
+        const auto& frames = debug_->frames();
+        if (frames.isEmpty()) return;
+        const auto& top = frames.first();
+        if (top.filePath.isEmpty()) return;
+        const int idx = indexOfPath(top.filePath);
+        if (idx < 0) return;
+        if (idx != activeIndex_) activateBuffer(idx);
+        if (EditorView* ed = editorView()) ed->setExecutionLine(top.line, /*isTopFrame=*/true);
+    });
+    connect(debug_, &DebugSession::resumed, this, [this]() {
+        if (EditorView* ed = editorView()) ed->clearExecutionLine();
+    });
+    connect(debug_, &DebugSession::programExited, this, [this](int code) {
+        // Clear the execution-line highlight in every open editor.
+        for (const auto& b : buffers_) {
+            if (b->view && b->view->kind() == TabContent::Kind::Editor) {
+                static_cast<EditorView*>(b->view)->clearExecutionLine();
+            }
+        }
+        statusBar()->show();
+        if (code < 0) {
+            statusBar()->showMessage("Debug session stopped.", 4000);
+        } else {
+            statusBar()->showMessage(
+                QStringLiteral("Debug session exited (%1).").arg(code), 4000);
+        }
+    });
+    connect(debug_, &DebugSession::sessionFailed, this, [this](const QString& msg) {
+        statusBar()->show();
+        statusBar()->showMessage(msg.isEmpty()
+            ? QStringLiteral("Debug session failed.") : msg, 6000);
+    });
+
+    // Auto-switch to the Debugger tab when a session starts. Do not switch
+    // away when it ends — yanking the pane out from under someone reading
+    // output is worse than a stale tab.
+    if (replPane_) replPane_->showDebugger();
+
+    // Pin TUR_STDLIB_DIR to the sibling of the resolved binary, exactly as
+    // ReplSession::start does — the debuggee is a fresh process with no
+    // inherited REPL environment.
+    QStringList extraEnv;
+    const QString tur = ResolveTurBinary();
+    if (!tur.isEmpty()) {
+        const QString siblingStdlib =
+            QFileInfo(tur).absolutePath() + QStringLiteral("/stdlib");
+        if (QDir(siblingStdlib).exists()) {
+            extraEnv << QStringLiteral("TUR_STDLIB_DIR=") + siblingStdlib;
+        }
+    }
+
+    debug_->start(v->filePath(), replWorkingDir(), extraEnv, debugStopOnEntry_);
+    debugStopOnEntry_ = false;  // one-shot: the menu action always runs to completion
+    statusBar()->show();
+    statusBar()->showMessage(QStringLiteral("Debugging %1…")
+                                 .arg(QFileInfo(v->filePath()).fileName()), 2000);
 }
 
 void MainWindow::formatFile() {
@@ -2047,6 +2243,7 @@ void MainWindow::closeEvent(QCloseEvent* event) {
         return;
     }
     if (repl_) repl_->stop();
+    if (debug_) debug_->stop();
     persistGlobals();
     // Leave the registry before the deferred delete: WA_DeleteOnClose runs on
     // the next event-loop pass, so anything checking count() in between (a
@@ -2091,6 +2288,15 @@ void MainWindow::startSession() {
 
     ensureAtLeastOneBuffer();
     activateBuffer(activeIndex_ < 0 ? 0 : activeIndex_);
+
+    // The breakpoint model is per-window (matching the session scope) and
+    // survives across debug sessions — "restart" respawns `tur dap`, but the
+    // breakpoints persist.
+    if (!breakpoints_) {
+        breakpoints_ = new BreakpointModel(this);
+        connect(breakpoints_, &BreakpointModel::changed, this,
+                [this](const QString& path) { refreshBreakpointMarkers(path); });
+    }
 
     // Started last, so replWorkingDir() sees whatever this window actually
     // ended up holding — a restored session, a file opened from the CLI, or
@@ -2137,6 +2343,13 @@ void MainWindow::applySessionState(const QVariantMap& state) {
     }
     refreshTabBar();
     updateEditorActionsEnabled();
+
+    // Restore the REPL-pane tab (REPL=0, Debugger=1). Default REPL so a
+    // restored session doesn't open on the (likely empty) Debugger tab.
+    if (replPane_) {
+        const int paneTab = state.value("replPaneTab", 0).toInt();
+        replPane_->setActiveTab(paneTab);
+    }
 }
 
 QVariantMap MainWindow::sessionState() const {
@@ -2169,6 +2382,8 @@ QVariantMap MainWindow::sessionState() const {
     }
     state["openBuffers"] = openPaths;
     state["activeBuffer"] = activeInList < 0 ? 0 : activeInList;
+    // Which REPL-pane tab was visible (REPL=0, Debugger=1). Default REPL.
+    state["replPaneTab"] = replPane_ ? replPane_->activeTab() : 0;
     return state;
 }
 

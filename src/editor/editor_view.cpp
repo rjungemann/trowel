@@ -175,6 +175,16 @@ EditorView::EditorView(QWidget* parent)
         emit hoverEnded();
     });
 
+    // Click the breakpoint margin to toggle a breakpoint. `position` is the
+    // text position under the click; lineFromPosition gives the 0-based line,
+    // +1 for the 1-based line the model and DAP use.
+    connect(sci_, &ScintillaEditBase::marginClicked, this,
+            [this](Scintilla::Position position, Scintilla::KeyMod, int margin) {
+                if (margin != dbg::kBreakpointMargin) return;
+                const int line = int(sci_->lineFromPosition(int(position))) + 1;
+                emit breakpointToggleRequested(line);
+            });
+
     // The dedicated userListSelection() signal carries no arguments (see
     // ScintillaEditBase.h: "Wants some args."), and the selection arrives as
     // *text* rather than an index. The generic notify() hook is the only place
@@ -285,8 +295,29 @@ void EditorView::applyDefaultStyling() {
                          (1 << diag::kErrorMarker) | (1 << diag::kWarningMarker));
     sci_->setMarginWidthN(kFoldMargin, 0);
 
+    // Dedicated breakpoint margin: a separate click target so toggling a
+    // breakpoint does not steal clicks from the diagnostic symbol margin, and
+    // the two decorations stop competing for 12px. Sensitive to clicks, which
+    // arrive on ScintillaEditBase::marginClicked.
+    sci_->setMarginTypeN(dbg::kBreakpointMargin, SC_MARGIN_SYMBOL);
+    sci_->setMarginWidthN(dbg::kBreakpointMargin, 14);
+    sci_->setMarginMaskN(dbg::kBreakpointMargin,
+                         (1 << dbg::kBreakpointMarker) |
+                         (1 << dbg::kBreakpointDisabledMarker) |
+                         (1 << dbg::kCurrentLineMarker) |
+                         (1 << dbg::kSelectedFrameMarker));
+    sci_->setMarginSensitiveN(dbg::kBreakpointMargin, true);
+
     sci_->markerDefine(diag::kErrorMarker, SC_MARK_CIRCLE);
     sci_->markerDefine(diag::kWarningMarker, SC_MARK_CIRCLE);
+    // Breakpoint markers: a filled circle when enabled, a hollow circle when
+    // disabled or pending. The current-execution line gets a short arrow in
+    // the margin plus a background tint on the line; a selected (non-top)
+    // frame gets a hollow arrow so it reads as "looking at" rather than "at".
+    sci_->markerDefine(dbg::kBreakpointMarker, SC_MARK_CIRCLE);
+    sci_->markerDefine(dbg::kBreakpointDisabledMarker, SC_MARK_CIRCLE);
+    sci_->markerDefine(dbg::kCurrentLineMarker, SC_MARK_SHORTARROW);
+    sci_->markerDefine(dbg::kSelectedFrameMarker, SC_MARK_ARROW);
     sci_->indicSetStyle(diag::kErrorIndicator, INDIC_SQUIGGLE);
     sci_->indicSetStyle(diag::kWarningIndicator, INDIC_SQUIGGLE);
     // Colors come from the theme; these are visible fallbacks for a theme that
@@ -565,6 +596,37 @@ void EditorView::setDiagnostics(const QVector<LspDiagnostic>& diagnostics) {
         sci_->markerAdd(sci_->lineFromPosition(start),
                         isError ? diag::kErrorMarker : diag::kWarningMarker);
     }
+}
+
+void EditorView::setBreakpointMarkers(const QVector<BreakpointMark>& marks) {
+    // Clear only the breakpoint markers, leaving diagnostics untouched.
+    sci_->markerDeleteAll(dbg::kBreakpointMarker);
+    sci_->markerDeleteAll(dbg::kBreakpointDisabledMarker);
+    for (const BreakpointMark& m : marks) {
+        if (m.line < 1) continue;
+        const int line0 = m.line - 1;
+        // Pending (not yet verified) and disabled both render hollow — the
+        // delay is visible rather than mysterious (constraint 6).
+        const bool hollow = !m.enabled || m.pending;
+        sci_->markerAdd(line0, hollow ? dbg::kBreakpointDisabledMarker
+                                      : dbg::kBreakpointMarker);
+    }
+}
+
+void EditorView::setExecutionLine(int line, bool isTopFrame) {
+    clearExecutionLine();
+    if (line < 1) return;
+    const int line0 = line - 1;
+    sci_->markerAdd(line0, isTopFrame ? dbg::kCurrentLineMarker
+                                      : dbg::kSelectedFrameMarker);
+    // Reveal the line. gotoLine ensures it is visible without forcing it to
+    // the top, which a stepper would fight against.
+    sci_->gotoLine(line0);
+}
+
+void EditorView::clearExecutionLine() {
+    sci_->markerDeleteAll(dbg::kCurrentLineMarker);
+    sci_->markerDeleteAll(dbg::kSelectedFrameMarker);
 }
 
 void EditorView::clearOccurrences() {
