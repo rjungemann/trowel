@@ -35,6 +35,11 @@ struct Theme {
     QColor diagnosticError;
     QColor diagnosticWarning;
 
+    // Wash painted over every occurrence of the symbol at the caret. Falls back
+    // to selectionBg at low alpha when a theme omits it, so existing user theme
+    // files keep working.
+    QColor occurrenceHighlight;
+
     QColor terminalBg;
     QColor terminalFg;
     QColor terminalCaret;

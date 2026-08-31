@@ -158,31 +158,25 @@ references" before building any of this. The three facts that shape the client:
    workspace returns a *shorter list* rather than an error — an incomplete list
    of references is still true about every entry in it.
 
-### 3.2 R1 — occurrence highlight
+### 3.2 R1 — occurrence highlight — **built, under `lsp-navigation.md` T3**
 
-The cheapest of the three and the one that pays on every caret move.
+This section is closed. The ordering note it carried said to delete it rather
+than build the feature twice if T3 landed first under the navigation plan's
+number, and that is what happened.
 
-- On `updateUi` with `SC_UPDATE_SELECTION`, debounce ~150 ms and send
-  `textDocument/documentHighlight` at the caret. Reuse the staleness guard
-  `LspManager` already has for completion and hover: a reply that arrives after
-  the version or the caret moved is dropped.
-- Paint into a **new indicator slot** — `diag::kErrorIndicator` is 8 and
-  `kWarningIndicator` is 9, so occurrences take **10**, with `INDIC_ROUNDBOX` and
-  a low alpha. Extend `namespace diag` or add a sibling `namespace occ`; do not
-  reuse a diagnostic slot, because the two must be able to overlap.
-- The server distinguishes the definition (`kind` 3) from uses (`kind` 1). Give
-  the definition its own slot (**11**) and a stronger alpha, the way Monaco's
-  `wordHighlightStrongBackground` differs from `wordHighlightBackground`.
-- **Do not ship a textual fallback.** `lsp-navigation.md` §2 already draws this
-  line and it applies unchanged: a word-based match paints `total` inside
-  `subtotal`, inside comments and inside strings. Under the caret that is
-  survivable; painted down a minimap it is a visible wrong answer. If the server
-  is down or the buffer has no URI, paint nothing.
+As shipped: `LspManager::requestDocumentHighlights`, a 250 ms caret-settle
+debounce in `EditorView` (matching the existing didChange cadence rather than
+the ~150 ms proposed here), indicator slot **10** with `INDIC_ROUNDBOX` under
+the text, and an `occurrenceHighlight` theme key falling back to `selectionBg`
+at low alpha. No textual fallback, as both plans required.
 
-**Ordering:** this is `lsp-navigation.md`'s T3, which that plan could not start
-because `v0.39.0` had no `documentHighlightProvider`. It is written here because
-this is the plan that lands the bump — but if T3 is built first under that
-plan's number, delete §3.2 rather than building it twice. §6 restates this.
+**One decision went the other way.** This section proposed a second slot (11)
+for the definition, since the server distinguishes it (`kind` 3) from uses
+(`kind` 1). That was dropped: `kind` is discarded in the manager. Two washes of
+different strength down the same buffer is a second decoration to explain and
+to theme, and the definition is already the row the outline preselects and the
+place `F12` lands. If it turns out to be wanted, the `kind` is one line away in
+`requestDocumentHighlights`.
 
 ### 3.3 R2 — find references
 
@@ -526,13 +520,21 @@ gets sequenced: land it upstream, cut a release, bump the pin.
 
 Both plans now have a claim on occurrence highlight. Resolve it once:
 
-- `lsp-navigation.md` **T3 is the same feature** as §3.2 here. It was blocked on
-  a server capability; T0 unblocked it. Build it under whichever plan is picked
-  up first and delete the other section — do not build it twice.
-- The **jump-and-go-back stack** is `lsp-navigation.md` T1's. §3.3 is a second
-  consumer, not a second implementation.
+- `lsp-navigation.md` **T3 is the same feature** as §3.2 here. **Resolved:** T3
+  shipped under the navigation plan, and §3.2 above is now a record of that
+  rather than work to do.
+- The **jump-and-go-back stack** is `lsp-navigation.md` T1's. **It exists** —
+  `MainWindow::NavEntry` plus `navBack_`/`navForward_`, keyed by path and byte
+  offset, with `nav.history` on the control API. §3.3 is a second consumer, not
+  a second implementation; push onto it before a Find References jump exactly
+  as `jumpToDefinition` and the outline already do.
 - The **results list widget** is shared between that plan's outline and this
-  plan's references panel. Whichever lands first owns it.
+  plan's references panel. The outline landed first and chose
+  `SCI_USERLISTSHOW` (`EditorView::showSymbolList`), which suits a
+  single-buffer list. A references panel spans files and probably wants the
+  palette `lsp-navigation.md` §6.2 defers — so this is *not* settled by the
+  outline having gone first, and §6.2's "do not build it speculatively" still
+  applies.
 - The **minimap occurrence lane** stays `minimap.md`'s, with the ordering
   constraint `lsp-navigation.md` §2 already states: it must not ship with a
   textual matcher behind it.

@@ -301,6 +301,10 @@ not exist when it was written: scope-aware `documentHighlight`, and
 `tur trace` recorder they are the subject of
 [`editor-intelligence.md`](editor-intelligence.md).
 
+**`documentHighlight` is now consumed**, by
+[`lsp-navigation.md`](lsp-navigation.md) T3 — occurrence highlighting on
+indicator slot 10. `rename`, `references` and the tracer remain unconsumed.
+
 ### Still not started
 
 6. **Incremental sync** (`textDocumentSync: 2`). Confirmed still `1` (full) in

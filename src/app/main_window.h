@@ -1,11 +1,14 @@
 #pragma once
 
+#include "lsp/lsp_location.h"
+#include "lsp/lsp_symbol.h"
 #include "repl/run_buffer.h"
 
 #include <QFont>
 #include <QMainWindow>
 #include <QStringList>
 #include <QVariantMap>
+#include <QVector>
 
 #include <memory>
 #include <vector>
@@ -77,6 +80,31 @@ public:
     void setWindowManager(WindowManager* windows);
     WindowManager* windowManager() const { return windows_; }
 
+public slots:
+    // Ask where the symbol under the caret is defined and jump there.
+    //
+    // Public because the control API drives it directly rather than through the
+    // menu: it has to connect to definitionJumpFinished before the request goes
+    // out, which menu.invoke gives it no chance to do.
+    void goToDefinition();
+    // Show the document outline. Public for the same reason as goToDefinition:
+    // the control API awaits outlineReady before the request goes out.
+    void showOutline();
+
+signals:
+    // A go-to-definition round trip finished. `jumped` is false when the server
+    // had no answer or the target could not be opened.
+    //
+    // Exists so a caller can await the jump without sleeping: the reply is
+    // asynchronous, and connecting before issuing the request is the only
+    // race-free way to observe it. The smoke suite's nav.goto_definition is
+    // built on this.
+    void definitionJumpFinished(bool jumped);
+    // The outline finished loading. `symbols` is what the server returned, in
+    // document order; `reason` is empty on success and otherwise names the
+    // state that was shown instead of a list.
+    void outlineReady(const QVector<LspSymbol>& symbols, const QString& reason);
+
 protected:
     void closeEvent(QCloseEvent* event) override;
     void dragEnterEvent(QDragEnterEvent* event) override;
@@ -102,6 +130,8 @@ private slots:
     void formatFile();
     void requestCompletion();
     void showDocumentation();
+    void navigateBack();
+    void navigateForward();
     void restartLanguageServer();
     // Reflect the active buffer's diagnostics in the status bar: the message
     // under the caret if there is one, otherwise a count.
@@ -116,6 +146,25 @@ private slots:
     void openPreferences();
     void applyRainbowBrackets(bool enabled);
     void rebuildWindowMenu();
+
+public:
+    // One visited caret position, for Back/Forward.
+    //
+    // A path and a byte offset, never an EditorView*: a tab can be dragged to
+    // another window and closed there, so a pointer parked in a history stack
+    // is a dangling pointer waiting to happen. Public because the control API
+    // reads the stacks back for the smoke tests.
+    struct NavEntry {
+        QString path;
+        int pos = 0;
+    };
+
+    const QVector<NavEntry>& navBackStack() const { return navBack_; }
+    const QVector<NavEntry>& navForwardStack() const { return navForward_; }
+
+    // True for a file inside the bundled stdlib. Such a buffer opens read-only
+    // and stays out of both recent files and the persisted session.
+    static bool isStdlibPath(const QString& path);
 
 private:
     struct Buffer {
@@ -154,6 +203,18 @@ private:
     bool replaceBufferWithFile(int index, const QString& path);
     bool replaceBufferWithDirectory(int index, const QString& path);
     void updateEditorActionsEnabled();
+
+    // Send the caret to a resolved definition, activating or opening a tab as
+    // the location requires. An invalid location is reported in the status bar
+    // rather than silently doing nothing.
+    void jumpToDefinition(const LspLocation& location);
+    // Where the caret is right now, for pushing onto the back stack.
+    NavEntry currentNavEntry() const;
+    // Restore a visited position, reopening its file if it has since been
+    // closed. False when the file no longer exists, which the caller treats as
+    // "skip this entry" rather than as an error.
+    bool goToNavEntry(const NavEntry& entry);
+    void updateNavActionsEnabled();
     // What the run/evaluate action means for the active tab. Disabled for a
     // non-Turmeric document, Project for a build.tur manifest.
     EvalMode currentEvalMode() const;
@@ -193,6 +254,10 @@ private:
     QAction* formatFileAction_ = nullptr;
     QAction* completeAction_ = nullptr;
     QAction* showDocAction_ = nullptr;
+    QAction* gotoDefinitionAction_ = nullptr;
+    QAction* outlineAction_ = nullptr;
+    QAction* navBackAction_ = nullptr;
+    QAction* navForwardAction_ = nullptr;
     QAction* restartLspAction_ = nullptr;
     QAction* toggleSplitAction_ = nullptr;
     QAction* toggleReplAction_ = nullptr;
@@ -200,6 +265,8 @@ private:
     QAction* saveAsAction_ = nullptr;
     QAction* pickFontAction_ = nullptr;
     QStringList recentFiles_;
+    QVector<NavEntry> navBack_;
+    QVector<NavEntry> navForward_;
     QFont editorFont_;
 };
 

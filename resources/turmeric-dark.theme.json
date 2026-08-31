@@ -11,7 +11,8 @@
         "activeLineNumberForeground": "#88796C",
         "matchedBraceForeground": "#EFA030",
         "matchedBraceBackground": "#D48B1C1F",
-        "indentGuide": "#252119"
+        "indentGuide": "#252119",
+        "occurrenceHighlight": "#28D48B1C"
     },
     "diagnostics": {
         "error": "#D9735A",

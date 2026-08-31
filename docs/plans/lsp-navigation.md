@@ -1,6 +1,12 @@
 # Navigation: outline, go-to-definition, occurrences — plan
 
-> **Status:** Proposed
+> **Status:** **Implemented.** T0–T3 shipped; T4 closed empty by measurement
+> (§4.2.1). Deferred by design and still open: Cmd/Ctrl-click to definition
+> (§5.4), the fuzzy palette (§6.2), the minimap occurrence lane (§2, now
+> unblocked and owned by [`minimap.md`](minimap.md)). Two upstream gaps were
+> measured and are recorded in §4.2.1 rather than worked around: `defmacro`
+> yields no `documentSymbol` entry, and every symbol's `range` equals its
+> `selectionRange`.
 > **Related:** [`lsp-support.md`](lsp-support.md) (phase 1 landed; this is the
 > follow-up it deferred), [`minimap.md`](minimap.md) (owns the minimap; see §2),
 > [`PLAN.md`](PLAN.md) §11
@@ -139,11 +145,12 @@ disagree about the minimap, `minimap.md` wins.
 | Phase | Scope | Depends on |
 |---|---|---|
 | **T0a** | Bump to `v0.39.0`; verify capabilities | — (**done**, §4.1) |
-| **T0b** | Bump again to the M5 release | Try Turmeric M5 shipped upstream |
-| **T1** | Go-to-definition, read-only stdlib tabs, navigation history | T0a + the §4.2 measurement |
-| **T2** | Outline: `documentSymbol` request + a user-list surface | T0a (kind labels need T0b) |
-| **T3** | Occurrence highlight on `documentHighlight` | **T0b** |
-| **T4** | Hover completeness — *conditional, may be empty* | T0b |
+| **T0b** | Bump again to the M5 release (`v0.42.0`) | — (**done**, §4.1) |
+| **T0c** | The §4.2 stdlib-definition measurement | — (**done**, §4.2.1) |
+| **T1** | Go-to-definition, read-only stdlib tabs, navigation history | — (**done**) |
+| **T2** | Outline: `documentSymbol` request + a user-list surface | — (**done**) |
+| **T3** | Occurrence highlight on `documentHighlight` | — (**done**) |
+| **T4** | Hover completeness | — (**closed empty**, §4.2.1) |
 
 T1, T2 and T3 are independent of each other and independently shippable. None of
 them touches `../turmeric`; if any does, the plan has gone wrong (§9).
@@ -244,6 +251,91 @@ Record the answer **in this document**. Three outcomes:
 
 Exit criteria: the build is green on the new pin, `just smoke` passes unchanged,
 and that one answer is written down.
+
+#### 4.2.1 Measured — outcome A, with one caveat that reshapes T2
+
+Probed 2026-08-30 against the staged `v0.42.0` binary
+(`build/macos-debug/trowel.app/Contents/Resources/turmeric/tur`), driven over
+stdio with `TUR_STDLIB_DIR` pinned to the sibling `stdlib/` exactly as
+`lsp_manager.cpp:127-133` does.
+
+**The headline answer is outcome A.** `textDocument/definition` on the stdlib
+name `list-head` returns:
+
+```json
+{"uri": "file:///…/Resources/turmeric/stdlib/list.tur",
+ "range": {"start": {"line": 348, "character": 6}, …}}
+```
+
+The path **exists and is readable**. Hover on the same name returns
+`(list-head : (fn [int] : int))` rather than the empty string §8 feared. **T1
+proceeds as written, and T4 is empty** — the hole it was contingent on did not
+survive M5.
+
+Also confirmed, all against the same binary:
+
+| Probe | Result |
+|---|---|
+| Capabilities | `documentHighlightProvider`, `definitionProvider`, `documentSymbolProvider`, `referencesProvider`, `renameProvider{prepareProvider}`, `signatureHelpProvider`, `documentFormattingProvider`, `workspaceSymbolProvider`, `positionEncoding: utf-8` |
+| `definition` shape | a **bare `Location` object**, not an array — parse all three shapes anyway (§5.1) |
+| `definition` on a use site | jumps to the definition site, same file |
+| `documentHighlight` on a name in a comment / in a string | **excluded** — only real uses come back. §11's headline T3 assertion holds against the real server |
+| `documentHighlight` `kind` | `3` (Write) on the definition site, `1` (Text) on uses |
+| `documentSymbol` kinds | `defn` → `12` (Function), `def` → `13` (Variable), `defstruct` → `23` (Struct) |
+| `documentSymbol` entries | carry both `range` and `selectionRange` |
+
+**The caveat, and it is load-bearing: a single analysis error blanks the whole
+file.** With one bad form in the buffer — the probe used a `defstruct` the
+server rejected with `defstruct 'Point': unsupported field form` —
+`documentSymbol` returns `[]`, and `definition` and `hover` return `null` /
+`{"contents":""}` **for every symbol in the file, including ones defined on
+lines before the error**. `documentHighlight` keeps working, because it is
+token-based rather than index-based.
+
+Two consequences:
+
+- **§6.1's empty state is wrong as written.** "No symbols → `Nothing defined
+  yet`" reads as *"this file defines nothing"*, but the overwhelmingly common
+  cause of an empty list in a file someone is actively editing is *"this file
+  does not currently compile"*. `LspManager::hasPublishedFor` plus a non-empty
+  `diagnosticsFor` already distinguishes the two. The outline needs a **fourth**
+  state: `Not analyzed — fix errors first`. An outline that goes blank the
+  moment you type an unbalanced paren, and blames the file for defining nothing,
+  is the same class of lie §6.1 already rejects for the unavailable-LSP case.
+- **T3 degrades more gracefully than T1 and T2**, which is the opposite of what
+  the phase ordering implies. Occurrence highlight keeps answering in a broken
+  buffer; definition and the outline do not.
+
+**`defmacro` produces no symbol at all.** Four definitions in, three come back —
+the `defmacro` is absent from `documentSymbol` entirely, not merely mis-kinded.
+So §6.1's `macro` kind label is unreachable, and §11's fixture requirement to
+cover `defmacro` becomes an assertion that it is **missing**, not present. That
+is an upstream gap; note it, do not work around it client-side.
+
+**`range` equals `selectionRange` on every symbol.** Both span the *name* only,
+never the definition's body:
+
+```
+nav-total   range=7:5-7:14   sel=7:5-7:14   same=True
+nav-double  range=8:6-8:16   sel=8:6-8:16   same=True
+NavPoint    range=9:11-9:19  sel=9:11-9:19  same=True
+```
+
+This kills c2mp's caret rule outright. "The name wins when the caret is on one,
+otherwise the smallest containing range" (§6.1) has no second half here: no
+range contains a caret that the first half did not already claim, so a caret
+anywhere inside a function body matches **nothing** and the outline preselects
+nothing — which is the state a user is in essentially always, since one rarely
+parks the caret on a definition's name.
+
+The fix is a **third pass**: the last definition starting at or before the
+caret. Worth being precise about why this is not the kind of client-side
+guessing §7 forbids. That prohibition is about *semantic* claims — asserting
+that some text is a use of a symbol when only its spelling matches. This is
+positional arithmetic over ranges the server itself supplied; it answers "which
+top-level form is the caret below", cannot point at unrelated text, and is
+exactly right for a file of top-level definitions. The containment pass is kept
+in place above it and starts working the day the server reports real extents.
 
 ---
 
@@ -395,7 +487,12 @@ where T0's bump pays off: before Try Turmeric M5, every non-function is
 
 **States that are not "a list":**
 
-- No symbols → a single disabled row, `Nothing defined yet` (c2mp `main.js:435`).
+- No symbols **and the file analyzed clean** → a single disabled row,
+  `Nothing defined yet` (c2mp `main.js:435`).
+- No symbols **because the file has errors** → a single disabled row,
+  `Not analyzed — fix errors first`. §4.2.1 measured that one bad form empties
+  `documentSymbol` for the entire file, so this is the common case, not the rare
+  one. Distinguish via `hasPublishedFor(uri) && !diagnosticsFor(uri).isEmpty()`.
 - LSP unavailable or still starting (`LspManager::state()` ≠ `Ready`) → say so.
   An empty outline that implies an empty file is the failure the web plan calls
   out, and it is worse here because a Trowel user may not know a server exists.
@@ -460,7 +557,14 @@ When it is available:
 
 ---
 
-## 8. T4 — hover completeness (conditional)
+## 8. T4 — hover completeness — **closed empty, §4.2.1**
+
+**Resolved by measurement: there is nothing to build.** Hover on the stdlib name
+`list-head` returns `(list-head : (fn [int] : int))` against the pinned
+`v0.42.0` server, so the hole this phase was contingent on did not survive Try
+Turmeric's M5. No upstream issue to file, no client code, no docs pack. The rest
+of this section is kept as the record of what was checked and why the answer
+mattered.
 
 `on_hover` (`lsp.c:821`) resolves the word under the caret against
 `find_symbol`, which scans only what `tur_collect_symbols` put in *this
@@ -542,11 +646,15 @@ New handlers, added to the dispatch table alongside the six `lsp.*` commands at
 
 | Command | Returns | Phase |
 |---|---|---|
-| `lsp.definition` | `{uri, line, character}` or null | T1 |
-| `lsp.symbols` | `[{name, kind, line, character, current}]` | T2 |
-| `lsp.highlights` | `[{start, end}]` | T3 |
+| `lsp.definition` | `{location: {uri, path, line, character}}` or `{location: null}` | T1 |
+| `lsp.symbols` | `{symbols: [{name, kind, kind_label, line, character, current}], count, reason}` | T2 |
+| `lsp.highlights` | `{ranges: [{start, end, …}], count}` | T3 |
 | `nav.history` | `{back: [...], forward: [...]}` | T1 |
-| `editor.is_read_only` | bool | T1 |
+| `nav.goto_definition` | `{jumped: bool}` — **added, see §14** | T1 |
+| `editor.is_read_only` | `{read_only: bool}` | T1 |
+
+`lsp.decorations` also grew an `occurrence_ranges` key, read back out of
+indicator 10 the same way the diagnostic keys are read out of 8 and 9.
 
 New `tests/smoke/test_lsp_navigation.py`:
 
@@ -630,3 +738,68 @@ Add one multi-definition file covering `def`, `defn`, `defstruct` and `defmacro`
   `main_window.cpp:195`). More generally: `keyboard-shortcuts.md` is the register,
   and every binding this plan adds goes in it in the same commit, or the doc
   becomes fiction.
+
+---
+
+## 14. As built — deviations from this plan
+
+Recorded rather than silently absorbed, in the same spirit as
+[`lsp-support.md`](lsp-support.md)'s Deviations section.
+
+1. **The outline lives in the Run menu, not the Edit menu** (§6.1 proposed
+   Edit). Trowel's Edit menu is empty (`main_window.cpp:234`); every language
+   action — Complete Symbol, Show Documentation, Format File — is already under
+   Run. Consistency with the codebase beat consistency with the plan text. Go to
+   Definition and Back/Forward went to the same place for the same reason.
+
+2. **Back/Forward are `Ctrl+Alt+-` and `Ctrl+Alt+Shift+-`.** §5.4 offered
+   `Ctrl+Alt+Left/Right` with a conflict note and asked for the decision to be
+   made once. Made: the fallback pair, because the workspace-switcher clash on
+   Linux is real and a binding that works everywhere beats one that needs a
+   caveat. The outline took §6.1's suggested `Ctrl+Shift+M`. All are in
+   [`keyboard-shortcuts.md`](../guides/keyboard-shortcuts.md).
+
+3. **The read-only tab marker is the text `(ro)`, not a lock glyph.** §5.3 asked
+   for "a lock affordance … matching how the modified-dot is already drawn". The
+   dot is a label suffix, and this is too — but the tab bar renders in the UI
+   font, which on Linux routinely has no lock codepoint, and a tofu box beside a
+   filename reads as corruption rather than as a lock. The tooltip carries the
+   reason in words.
+
+4. **`nav.goto_definition` was added to the control API**, beyond §11's table.
+   The jump is an async round trip, so a test that invokes the menu action and
+   then asserts has no race-free moment to observe completion — and §11's own
+   house rule forbids sleeping. The handler connects to a new
+   `MainWindow::definitionJumpFinished` signal *before* issuing the request.
+   `lsp.symbols` is built the same way on `outlineReady`, which additionally
+   matters because several outline states resolve synchronously.
+
+5. **`symbolIndexAtCaret` has a third pass** the plan did not describe, forced by
+   the `range == selectionRange` finding in §4.2.1. Rationale is there; the
+   containment pass c2mp specifies is kept above it and takes over unchanged if
+   the server starts reporting real extents.
+
+6. **Save and Format File are disabled on a read-only buffer**, which §5.3 did
+   not spell out. It follows directly from its reasoning — the lock exists
+   precisely so the user does not meet a save error after the fact. Save As
+   stays enabled: copying a stdlib file somewhere writable is a reasonable thing
+   to want.
+
+7. **`documentHighlight`'s `kind` is discarded.** The server distinguishes the
+   definition (3) from uses (1). `editor-intelligence.md` §3.2 proposed a second
+   indicator slot and a stronger alpha for the definition; that was dropped
+   rather than shipped, because two washes of different strength is a second
+   decoration to explain and to theme, and the definition is already the row the
+   outline preselects and the place `F12` lands.
+
+### Still open, by design
+
+- **Cmd/Ctrl-click to definition** (§5.4) — a real feature with a real cost,
+  deliberately not ridden along inside T1.
+- **The fuzzy palette** (§6.2) — build only if the user list proves too blunt,
+  and `workspace/symbol` remains advertised and unused until then.
+- **The minimap occurrence lane** (§2) — now unblocked and owned by
+  [`minimap.md`](minimap.md), whose Decorations section carries the lane and the
+  note that its ordering constraint is satisfied.
+- **`signatureHelp` and in-process `formatting`** (§4.1) — newly possible,
+  explicitly out of scope here, recorded in `lsp-support.md`.

@@ -56,6 +56,7 @@ void TabBar::setTabs(const QStringList& displayNames, int activeIndex) {
     tooltips_.clear();
     for (int i = 0; i < names_.size(); ++i) tooltips_.append(QString());
     modified_.assign(names_.size(), false);
+    readOnly_.assign(names_.size(), false);
     active_ = activeIndex;
     if (hovered_ >= names_.size()) hovered_ = -1;
     relayout();
@@ -79,6 +80,14 @@ void TabBar::setModified(int index, bool modified) {
     update();
 }
 
+void TabBar::setReadOnly(int index, bool readOnly) {
+    if (index < 0 || index >= static_cast<int>(readOnly_.size())) return;
+    if (readOnly_[index] == readOnly) return;
+    readOnly_[index] = readOnly;
+    relayout();
+    update();
+}
+
 void TabBar::setTooltip(int index, const QString& tip) {
     if (index < 0 || index >= tooltips_.size()) return;
     tooltips_[index] = tip;
@@ -98,6 +107,13 @@ void TabBar::relayout() {
     const int h = height();
     for (int i = 0; i < names_.size(); ++i) {
         QString label = names_[i];
+        // Spelled out rather than drawn as a padlock glyph: the tab bar renders
+        // in the UI font, which on Linux routinely has no lock codepoint, and a
+        // tofu box next to a filename reads as corruption rather than as a
+        // lock. The bullet above is safe because every UI font has U+2022.
+        if (i < static_cast<int>(readOnly_.size()) && readOnly_[i]) {
+            label += QStringLiteral(" (ro)");
+        }
         if (i < static_cast<int>(modified_.size()) && modified_[i]) {
             label += QStringLiteral(" •");
         }
@@ -119,6 +135,7 @@ void TabBar::relayout() {
         }
         g.tooltip = (i < tooltips_.size()) ? tooltips_[i] : QString();
         g.modified = (i < static_cast<int>(modified_.size())) ? modified_[i] : false;
+        g.readOnly = (i < static_cast<int>(readOnly_.size())) ? readOnly_[i] : false;
         geoms_.push_back(std::move(g));
         x += w;
     }

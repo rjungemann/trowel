@@ -131,6 +131,11 @@ bool LspManager::ensureStarted() {
         QFileInfo(binary).absolutePath() + QStringLiteral("/stdlib");
     if (QDir(siblingStdlib).exists()) {
         extraEnv << QStringLiteral("TUR_STDLIB_DIR=") + siblingStdlib;
+        // Remembered so stdlibDir() can answer "did this definition land inside
+        // the bundle?" without re-deriving the path from the binary.
+        stdlibDir_ = siblingStdlib;
+    } else {
+        stdlibDir_.clear();
     }
 
     if (!client_->start(binary, {"lsp"}, QString(), extraEnv)) {
@@ -396,6 +401,191 @@ void LspManager::requestHover(EditorView* view, int pos, HoverCallback cb) {
         if (!text.trimmed().isEmpty()) cb(text);
     },
     kInteractiveTimeoutMs);
+}
+
+void LspManager::requestDefinition(EditorView* view, int pos, DefinitionCallback cb) {
+    DocState* doc = docFor(view);
+    if (!doc || !client_ || state_ != State::Ready) {
+        if (cb) cb(LspLocation{});
+        return;
+    }
+
+    const QString uri = UriFor(view);
+    const int generation = doc->generation;
+
+    // Same reason completion flushes: resolving a position against text the
+    // server has not seen yet answers about the wrong buffer, and here that
+    // means jumping the user to the wrong line rather than merely offering a
+    // stale list.
+    if (doc->debounce && doc->debounce->isActive()) {
+        doc->debounce->stop();
+        sendDidChange(uri);
+    }
+
+    client_->request("textDocument/definition", QJsonObject{
+        {"textDocument", QJsonObject{{"uri", uri}}},
+        {"position", LspPositionToJson(LspPositionFromPos(view->sciWidget(), pos))},
+    },
+    [this, cb = std::move(cb), uri, generation](const QJsonValue& result, const LspError* err) {
+        if (!cb) return;
+        const auto it = docs_.constFind(uri);
+        // Stale: the user kept typing. Staying silent is right here — landing a
+        // jump against text that has moved is worse than not jumping.
+        if (it == docs_.constEnd() || it->generation != generation) return;
+        if (err) { cb(LspLocation{}); return; }
+
+        // The server writes a bare Location (lsp.c:940-957), but the spec also
+        // allows Location[] and LocationLink[]. Accept all three: the server is
+        // under active development and a conforming change should not break
+        // navigation.
+        QJsonObject loc;
+        if (result.isObject()) {
+            loc = result.toObject();
+        } else if (result.isArray()) {
+            const QJsonArray arr = result.toArray();
+            if (!arr.isEmpty()) loc = arr.first().toObject();
+        }
+
+        // LocationLink spells its fields targetUri/targetSelectionRange; a
+        // plain Location uses uri/range.
+        const QString targetUri = loc.contains("targetUri")
+                                      ? loc.value("targetUri").toString()
+                                      : loc.value("uri").toString();
+        const QJsonObject range = loc.contains("targetSelectionRange")
+                                      ? loc.value("targetSelectionRange").toObject()
+                                      : loc.value("range").toObject();
+        if (targetUri.isEmpty()) { cb(LspLocation{}); return; }
+
+        const QJsonObject start = range.value("start").toObject();
+        cb(LspLocation{targetUri, start.value("line").toInt(),
+                       start.value("character").toInt()});
+    },
+    kInteractiveTimeoutMs);
+}
+
+namespace {
+
+LspRange RangeFromJson(const QJsonObject& range) {
+    const QJsonObject start = range.value("start").toObject();
+    const QJsonObject end = range.value("end").toObject();
+    return LspRange{start.value("line").toInt(), start.value("character").toInt(),
+                    end.value("line").toInt(), end.value("character").toInt()};
+}
+
+// Flatten one documentSymbol entry and its children into `out`.
+//
+// The pinned server returns a flat DocumentSymbol[] with no children, but the
+// spec permits nesting and also permits the older SymbolInformation shape
+// (which spells its span `location.range` and has no selectionRange). Handling
+// all three keeps a conforming server change from emptying the outline.
+void CollectSymbols(const QJsonArray& items, QVector<LspSymbol>& out) {
+    for (const QJsonValue& v : items) {
+        const QJsonObject o = v.toObject();
+        const QString name = o.value("name").toString();
+        if (name.isEmpty()) continue;
+
+        LspSymbol sym;
+        sym.name = name;
+        sym.kind = o.value("kind").toInt();
+        if (o.contains("location")) {  // SymbolInformation
+            sym.range = RangeFromJson(o.value("location").toObject()
+                                          .value("range").toObject());
+            sym.selection = sym.range;
+        } else {  // DocumentSymbol
+            sym.range = RangeFromJson(o.value("range").toObject());
+            sym.selection = o.contains("selectionRange")
+                                ? RangeFromJson(o.value("selectionRange").toObject())
+                                : sym.range;
+        }
+        out.append(sym);
+
+        // Depth-first, so a nested symbol still lands after its parent and the
+        // list stays in document order.
+        if (o.contains("children")) {
+            CollectSymbols(o.value("children").toArray(), out);
+        }
+    }
+}
+
+}  // namespace
+
+void LspManager::requestDocumentSymbols(EditorView* view, SymbolsCallback cb) {
+    DocState* doc = docFor(view);
+    if (!doc || !client_ || state_ != State::Ready) {
+        if (cb) cb({});
+        return;
+    }
+
+    const QString uri = UriFor(view);
+    const int generation = doc->generation;
+
+    // An outline of text the server has not seen is an outline of the wrong
+    // file. Same flush the other requests do.
+    if (doc->debounce && doc->debounce->isActive()) {
+        doc->debounce->stop();
+        sendDidChange(uri);
+    }
+
+    client_->request("textDocument/documentSymbol", QJsonObject{
+        {"textDocument", QJsonObject{{"uri", uri}}},
+    },
+    [this, cb = std::move(cb), uri, generation](const QJsonValue& result, const LspError* err) {
+        if (!cb) return;
+        const auto it = docs_.constFind(uri);
+        if (it == docs_.constEnd() || it->generation != generation) return;  // stale
+        if (err) { cb({}); return; }
+
+        QVector<LspSymbol> symbols;
+        CollectSymbols(result.toArray(), symbols);
+        cb(symbols);
+    },
+    kInteractiveTimeoutMs);
+}
+
+void LspManager::requestDocumentHighlights(EditorView* view, int pos,
+                                           HighlightsCallback cb) {
+    DocState* doc = docFor(view);
+    if (!doc || !client_ || state_ != State::Ready) {
+        if (cb) cb({});
+        return;
+    }
+
+    const QString uri = UriFor(view);
+    const int generation = doc->generation;
+
+    if (doc->debounce && doc->debounce->isActive()) {
+        doc->debounce->stop();
+        sendDidChange(uri);
+    }
+
+    client_->request("textDocument/documentHighlight", QJsonObject{
+        {"textDocument", QJsonObject{{"uri", uri}}},
+        {"position", LspPositionToJson(LspPositionFromPos(view->sciWidget(), pos))},
+    },
+    [this, cb = std::move(cb), uri, generation](const QJsonValue& result, const LspError* err) {
+        if (!cb) return;
+        const auto it = docs_.constFind(uri);
+        if (it == docs_.constEnd() || it->generation != generation) return;  // stale
+        if (err) { cb({}); return; }
+
+        QVector<LspRange> ranges;
+        for (const QJsonValue& v : result.toArray()) {
+            // `kind` (Text/Read/Write) is deliberately dropped: an occurrence
+            // is an occurrence, and painting reads and writes differently is a
+            // second decoration nobody asked for.
+            ranges.append(RangeFromJson(v.toObject().value("range").toObject()));
+        }
+        cb(ranges);
+    },
+    kInteractiveTimeoutMs);
+}
+
+bool LspManager::isStdlibPath(const QString& path) const {
+    // stdlibDir_ is only set once a server has been started; without one there
+    // is no bundle to be inside of, so nothing is read-only.
+    if (stdlibDir_.isEmpty() || path.isEmpty()) return false;
+    const QString root = QDir(stdlibDir_).absolutePath() + QLatin1Char('/');
+    return QFileInfo(path).absoluteFilePath().startsWith(root);
 }
 
 void LspManager::restart() {

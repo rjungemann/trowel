@@ -497,6 +497,7 @@ void HandleLspDecorations(MainWindow* w, const QJsonObject&, const Reply& reply)
     QJsonObject o;
     o["error_ranges"] = rangesFor(diag::kErrorIndicator);
     o["warning_ranges"] = rangesFor(diag::kWarningIndicator);
+    o["occurrence_ranges"] = rangesFor(occurrence::kIndicator);
     o["error_marker_lines"] = errorMarkerLines;
     o["warning_marker_lines"] = warningMarkerLines;
     reply(o, nullptr);
@@ -546,6 +547,157 @@ void HandleLspHover(MainWindow* w, const QJsonObject& args, const Reply& reply) 
         reply(o, nullptr);
     });
     ArmTimeout(ctx, w, timeout, reply);
+}
+
+void HandleLspDefinition(MainWindow* w, const QJsonObject& args, const Reply& reply) {
+    EditorView* e = RequireEditor(w, reply);
+    if (!e) return;
+    const int timeout = args.value("timeout_ms").toInt(5000);
+    const int pos = args.contains("pos") ? args.value("pos").toInt() : e->cursorPos();
+
+    // Reports the raw server answer rather than performing the jump, so a test
+    // can tell "the server had no definition" apart from "the window failed to
+    // open the tab". Driving the actual navigation is menu.invoke's job.
+    auto ctx = std::make_shared<WaitCtx>();
+    LspManager::instance()->requestDefinition(e, pos, [ctx, reply](const LspLocation& loc) {
+        if (ctx->done) return;
+        ctx->done = true;
+        if (ctx->timer) ctx->timer->stop();
+        QJsonObject o;
+        if (!loc.isValid()) {
+            o["location"] = QJsonValue::Null;
+        } else {
+            o["location"] = QJsonObject{
+                {"uri", loc.uri},
+                {"path", LspManager::PathForUri(loc.uri)},
+                {"line", loc.line},
+                {"character", loc.character},
+            };
+        }
+        reply(o, nullptr);
+    });
+    ArmTimeout(ctx, w, timeout, reply);
+}
+
+void HandleLspHighlights(MainWindow* w, const QJsonObject& args, const Reply& reply) {
+    EditorView* e = RequireEditor(w, reply);
+    if (!e) return;
+    const int timeout = args.value("timeout_ms").toInt(5000);
+    const int pos = args.contains("pos") ? args.value("pos").toInt() : e->cursorPos();
+
+    auto ctx = std::make_shared<WaitCtx>();
+    LspManager::instance()->requestDocumentHighlights(
+        e, pos, [ctx, reply, e](const QVector<LspRange>& ranges) {
+            if (ctx->done) return;
+            ctx->done = true;
+            if (ctx->timer) ctx->timer->stop();
+
+            // Paint here as well as report. The debounce would get there on its
+            // own, but a test that asserts on indicator 10 immediately after
+            // this call must not race it.
+            e->setOccurrences(ranges);
+
+            QJsonArray arr;
+            for (const LspRange& r : ranges) {
+                arr.append(QJsonObject{
+                    {"start", e->posFromLineCol(r.startLine, r.startCharacter)},
+                    {"end", e->posFromLineCol(r.endLine, r.endCharacter)},
+                    {"start_line", r.startLine},
+                    {"start_character", r.startCharacter},
+                });
+            }
+            QJsonObject o;
+            o["ranges"] = arr;
+            o["count"] = arr.size();
+            reply(o, nullptr);
+        });
+    ArmTimeout(ctx, w, timeout, reply);
+}
+
+void HandleLspSymbols(MainWindow* w, const QJsonObject& args, const Reply& reply) {
+    const int timeout = args.value("timeout_ms").toInt(5000);
+    EditorView* e = RequireEditor(w, reply);
+    if (!e) return;
+
+    // Connected before the request, same as nav.goto_definition: some of the
+    // outline's states resolve synchronously (unsaved buffer, server not
+    // ready) and would otherwise be missed entirely.
+    auto ctx = std::make_shared<WaitCtx>();
+    ctx->conn = QObject::connect(w, &MainWindow::outlineReady, w,
+        [ctx, reply, e](const QVector<LspSymbol>& symbols, const QString& reason) {
+            if (ctx->done) return;
+            ctx->done = true;
+            if (ctx->timer) ctx->timer->stop();
+            QObject::disconnect(ctx->conn);
+
+            const int current = e->symbolIndexAtCaret(symbols);
+            QJsonArray arr;
+            for (int i = 0; i < symbols.size(); ++i) {
+                const LspSymbol& s = symbols.at(i);
+                arr.append(QJsonObject{
+                    {"name", s.name},
+                    {"kind", s.kind},
+                    {"kind_label", LspSymbolKindLabel(s.kind)},
+                    {"line", s.selection.startLine},
+                    {"character", s.selection.startCharacter},
+                    {"current", i == current},
+                });
+            }
+            QJsonObject o;
+            o["symbols"] = arr;
+            o["count"] = arr.size();
+            // Empty on success. Lets a test tell "this file defines nothing"
+            // apart from "this file did not compile" and from "no server".
+            o["reason"] = reason;
+            reply(o, nullptr);
+        });
+    w->showOutline();
+    ArmTimeout(ctx, w, timeout, reply);
+}
+
+void HandleNavGotoDefinition(MainWindow* w, const QJsonObject& args, const Reply& reply) {
+    const int timeout = args.value("timeout_ms").toInt(5000);
+    EditorView* e = RequireEditor(w, reply);
+    if (!e) return;
+
+    // Connect *before* triggering: the round trip is asynchronous, and a
+    // caller that requested first and waited second could miss the reply. This
+    // is what keeps the navigation tests free of sleeps.
+    auto ctx = std::make_shared<WaitCtx>();
+    ctx->conn = QObject::connect(w, &MainWindow::definitionJumpFinished, w,
+        [ctx, reply](bool jumped) {
+            if (ctx->done) return;
+            ctx->done = true;
+            if (ctx->timer) ctx->timer->stop();
+            QObject::disconnect(ctx->conn);
+            QJsonObject o;
+            o["jumped"] = jumped;
+            reply(o, nullptr);
+        });
+    w->goToDefinition();
+    ArmTimeout(ctx, w, timeout, reply);
+}
+
+void HandleNavHistory(MainWindow* w, const QJsonObject&, const Reply& reply) {
+    auto encode = [](const QVector<MainWindow::NavEntry>& stack) {
+        QJsonArray out;
+        for (const MainWindow::NavEntry& e : stack) {
+            out.append(QJsonObject{{"path", e.path}, {"pos", e.pos}});
+        }
+        return out;
+    };
+    QJsonObject o;
+    o["back"] = encode(w->navBackStack());
+    o["forward"] = encode(w->navForwardStack());
+    reply(o, nullptr);
+}
+
+void HandleEditorIsReadOnly(MainWindow* w, const QJsonObject&, const Reply& reply) {
+    EditorView* e = RequireEditor(w, reply);
+    if (!e) return;
+    QJsonObject o;
+    o["read_only"] = e->isReadOnly();
+    reply(o, nullptr);
 }
 
 void HandleWaitDiagnostics(MainWindow* w, QPointer<ControlConnection> conn,
@@ -875,13 +1027,20 @@ void Dispatch(WindowManager* windows, QPointer<ControlConnection> conn,
     if (cmd == "editor.get_selection") { HandleEditorGetSelection(w, args, reply); return; }
     if (cmd == "editor.set_selection") { HandleEditorSetSelection(w, args, reply); return; }
     if (cmd == "editor.get_style_at")  { HandleEditorGetStyleAt(w, args, reply); return; }
+    if (cmd == "editor.is_read_only")  { HandleEditorIsReadOnly(w, args, reply); return; }
 
     if (cmd == "lsp.status")           { HandleLspStatus(w, args, reply); return; }
     if (cmd == "lsp.diagnostics")      { HandleLspDiagnostics(w, args, reply); return; }
     if (cmd == "lsp.decorations")      { HandleLspDecorations(w, args, reply); return; }
     if (cmd == "lsp.completions")      { HandleLspCompletions(w, args, reply); return; }
     if (cmd == "lsp.hover")            { HandleLspHover(w, args, reply); return; }
+    if (cmd == "lsp.definition")       { HandleLspDefinition(w, args, reply); return; }
+    if (cmd == "lsp.symbols")          { HandleLspSymbols(w, args, reply); return; }
+    if (cmd == "lsp.highlights")       { HandleLspHighlights(w, args, reply); return; }
     if (cmd == "lsp.restart")          { HandleLspRestart(w, args, reply); return; }
+
+    if (cmd == "nav.history")          { HandleNavHistory(w, args, reply); return; }
+    if (cmd == "nav.goto_definition")  { HandleNavGotoDefinition(w, args, reply); return; }
 
     if (cmd == "repl.send")            { HandleReplSend(w, args, reply); return; }
     if (cmd == "repl.press")           { HandleReplPress(w, args, reply); return; }

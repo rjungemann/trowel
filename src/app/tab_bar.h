@@ -18,6 +18,10 @@ public:
     void setTabs(const QStringList& displayNames, int activeIndex);
     void setActive(int index);
     void setModified(int index, bool modified);
+    // Mark a tab whose buffer cannot be edited (a bundled stdlib file opened by
+    // a definition jump). Drawn as a label suffix, exactly like the
+    // modified-dot, so the two compose without fighting over the same space.
+    void setReadOnly(int index, bool readOnly);
     void setTooltip(int index, const QString& tip);
 
     void setColors(const QColor& bg, const QColor& fg, const QColor& divider);
@@ -43,6 +47,7 @@ private:
         QString label;      // possibly elided, with modified marker appended
         QString tooltip;
         bool modified = false;
+        bool readOnly = false;
     };
 
     void relayout();
@@ -56,6 +61,7 @@ private:
 
     std::vector<TabGeom> geoms_;
     std::vector<bool> modified_;
+    std::vector<bool> readOnly_;
     QStringList names_;
     QStringList tooltips_;
     int active_ = -1;

@@ -1,0 +1,22 @@
+;; Fixture for the navigation features: outline kinds, definition jumps and
+;; occurrence highlighting all read this one file.
+;;
+;; It must analyze cleanly. A single rejected form empties documentSymbol and
+;; nulls every definition and hover reply for the whole file (navigation plan
+;; §4.2.1), which would make these tests fail for a reason unrelated to what
+;; they check.
+(def nav-total 10)
+(defn nav-double [n : int] : int (* n 2))
+(defstruct NavPoint :copy [x : int y : int])
+(defmacro nav-twice [x] x)
+
+;; nav-total appears in this comment, and below inside a string literal.
+;; Neither is a use, and neither may be highlighted as one.
+(def nav-note "nav-total in a string")
+
+(defn nav-use [] : int (nav-double nav-total))
+(defn nav-use-again [] : int (+ nav-total 1))
+
+;; `list-head` is defined in the bundled stdlib, so a definition jump from here
+;; has to open a tab outside the workspace — the read-only case.
+(defn nav-stdlib [] : int (list-head (tcons 1 (tnil))))

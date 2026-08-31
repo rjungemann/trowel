@@ -1,6 +1,8 @@
 #pragma once
 
 #include "lsp/lsp_diagnostic.h"
+#include "lsp/lsp_location.h"
+#include "lsp/lsp_symbol.h"
 
 #include <QHash>
 #include <QJsonObject>
@@ -60,12 +62,48 @@ public:
 
     using CompletionCallback = std::function<void(const QStringList& labels)>;
     using HoverCallback = std::function<void(const QString& text)>;
+    using DefinitionCallback = std::function<void(const LspLocation&)>;
 
-    // Both drop their reply if the document changed underneath them, so a
+    // All three drop their reply if the document changed underneath them, so a
     // stale popup can never appear over newer text. The callback simply isn't
     // invoked in that case.
     void requestCompletion(EditorView* view, int pos, CompletionCallback cb);
     void requestHover(EditorView* view, int pos, HoverCallback cb);
+    // Unlike the other two, this one reports "no answer" rather than staying
+    // silent: it fires `cb` with an invalid LspLocation when the server returns
+    // null or an empty array. A jump that quietly does nothing is
+    // indistinguishable from a jump that is still in flight.
+    void requestDefinition(EditorView* view, int pos, DefinitionCallback cb);
+
+    using SymbolsCallback = std::function<void(const QVector<LspSymbol>&)>;
+    // Document outline, in the order the server returns it — which is document
+    // order, and is the one thing an outline is for. Never sorted here.
+    //
+    // Like requestDefinition, an empty result is reported rather than dropped:
+    // §4.2.1 measured that a file with any analysis error yields `[]`, and the
+    // caller has to be able to say so.
+    void requestDocumentSymbols(EditorView* view, SymbolsCallback cb);
+
+    using HighlightsCallback = std::function<void(const QVector<LspRange>&)>;
+    // Every occurrence of the symbol at `pos`, from the server's index.
+    //
+    // Token-based, not textual: the same spelling inside a comment or a string
+    // is not a use and does not come back. That is the whole reason this goes
+    // through the server rather than through Scintilla's word matching.
+    void requestDocumentHighlights(EditorView* view, int pos, HighlightsCallback cb);
+
+    // Directory the bundled stdlib was pinned to, or empty when none was found
+    // next to the resolved binary.
+    //
+    // The single source of truth for "is this buffer part of the read-only
+    // stdlib". Deriving that path a second time somewhere else is how the two
+    // copies drift after a TROWEL_TURMERIC_VERSION bump.
+    QString stdlibDir() const { return stdlibDir_; }
+
+    // True for a file inside that directory. Buffers holding one open
+    // read-only, stay out of recent files, and stay out of the persisted
+    // session — see the navigation plan §5.3.
+    bool isStdlibPath(const QString& path) const;
 
     QVector<LspDiagnostic> diagnosticsFor(const QString& uri) const;
     // True once the server has published at least one batch for this URI.
@@ -122,6 +160,7 @@ private:
     bool restarting_ = false;
     QString lastError_;
     int restartsRemaining_ = 3;
+    QString stdlibDir_;
 
     QHash<QString, DocState> docs_;
     QHash<QString, QVector<LspDiagnostic>> diagnostics_;

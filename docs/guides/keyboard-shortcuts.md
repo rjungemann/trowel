@@ -39,9 +39,33 @@ Trowel decides where a file opens.
 | `Ctrl+R` | Run buffer (evaluate file) |
 | `Ctrl+Shift+E` | Run selection |
 | `Ctrl+Shift+R` | Restart REPL (in the current file's directory) |
+| `Ctrl+Shift+K` | Clear REPL output |
+| `Ctrl+Shift+F` | Format file (`tur format`) |
 | `Ctrl+E` | Focus editor |
 | `Ctrl+T` | Focus REPL |
 | ``Ctrl+` `` | Toggle focus between editor and REPL |
+
+## Language
+
+Turmeric buffers only — these are greyed out for the other languages Trowel
+highlights, since the language server speaks only Turmeric.
+
+| Shortcut | Action |
+| --- | --- |
+| `Ctrl+Space` | Complete symbol at the caret |
+| `Ctrl+Shift+D` | Show documentation for the symbol at the caret |
+| `F12` | Go to definition |
+| `Ctrl+Alt+-` | Go back (return to the position before the last jump) |
+| `Ctrl+Alt+Shift+-` | Go forward |
+
+Back and Forward deliberately avoid `Ctrl+Alt+Left`/`Right`, which several
+Linux desktops claim as a workspace switcher; the pair above is VS Code's
+alternate and is unclaimed on all three platforms.
+
+A definition inside the bundled Turmeric stdlib opens a read-only tab, marked
+`(ro)` in the tab bar. It stays out of *Open Recent* and out of the restored
+session — the file lives in the app bundle and is replaced wholesale on
+upgrade, so a remembered one would quietly show the previous version's stdlib.
 
 ## Directory view
 

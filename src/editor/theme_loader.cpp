@@ -225,6 +225,16 @@ Theme LoadBuiltinDarkTheme() {
     t.diagnosticError   = parseColor(diagnostics.value("error"),   QColor("#D9735A"));
     t.diagnosticWarning = parseColor(diagnostics.value("warning"), QColor("#EFA030"));
 
+    // Falls back to the selection colour at a lower alpha, so a theme file
+    // written before occurrence highlighting existed still gets a sane wash
+    // instead of an invisible or garish one. A wash rather than a fill: the
+    // token colours underneath have to stay legible, and a mark that hides the
+    // code it marks defeats the purpose.
+    QColor occurrenceFallback = t.selectionBg;
+    occurrenceFallback.setAlpha(qMin(t.selectionBg.alpha(), 40));
+    t.occurrenceHighlight =
+        parseColor(ed.value("occurrenceHighlight"), occurrenceFallback);
+
     const QJsonObject term = root.value("terminal").toObject();
     t.terminalBg     = parseColor(term.value("background"), t.editorBg);
     t.terminalFg     = parseColor(term.value("foreground"), t.editorFg);
@@ -301,6 +311,15 @@ void ApplyThemeToEditor(ScintillaEdit* sci, const Theme& theme) {
     sci->markerSetFore(diag::kWarningMarker, bgra(theme.diagnosticWarning));
     sci->markerSetBack(diag::kWarningMarker, bgra(theme.diagnosticWarning));
     sci->setMarginBackN(1, bgra(theme.editorBg));
+
+    // Occurrences: a translucent rounded box under the text, not a squiggle.
+    // Painted under the text so the syntax colours stay on top and readable.
+    sci->indicSetStyle(occurrence::kIndicator, INDIC_ROUNDBOX);
+    sci->indicSetFore(occurrence::kIndicator, bgra(theme.occurrenceHighlight));
+    sci->indicSetAlpha(occurrence::kIndicator, theme.occurrenceHighlight.alpha());
+    sci->indicSetOutlineAlpha(occurrence::kIndicator,
+                              qMin(theme.occurrenceHighlight.alpha() * 2, 255));
+    sci->indicSetUnder(occurrence::kIndicator, true);
 
     // Matched brace.
     sci->styleSetFore(STYLE_BRACELIGHT, bgra(theme.matchedBraceFg));

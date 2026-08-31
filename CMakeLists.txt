@@ -61,6 +61,8 @@ add_library(trowel_lib STATIC
     src/editor/theme_loader.h
     src/lsp/lsp_client.cpp
     src/lsp/lsp_client.h
+    src/lsp/lsp_location.h
+    src/lsp/lsp_symbol.h
     src/lsp/lsp_manager.cpp
     src/lsp/lsp_manager.h
     src/lsp/lsp_position.cpp

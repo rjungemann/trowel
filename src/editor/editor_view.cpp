@@ -12,6 +12,7 @@
 #include <QFontInfo>
 #include <QSettings>
 #include <QTextStream>
+#include <QTimer>
 #include <QVBoxLayout>
 
 namespace trowel {
@@ -20,6 +21,22 @@ namespace {
 constexpr int kLineNumberMargin = 0;
 constexpr int kSymbolMargin = 1;
 constexpr int kFoldMargin = 2;
+
+// User-list identities. Scintilla hands the list type back with the selection,
+// which is how an outline pick is told apart from a placeholder row nobody
+// should be able to act on.
+constexpr int kOutlineListType = 1;
+constexpr int kOutlineMessageListType = 2;
+
+// Separates a row's name from its kind. An em dash rather than a hyphen so it
+// cannot be mistaken for part of a Turmeric identifier, which routinely
+// contains hyphens (`nav-total`, `list-head`).
+const char* const kOutlineKindSeparator = " — ";
+
+// How long the caret must sit still before occurrences are requested. Matches
+// the didChange debounce rather than inventing a second cadence, and it is the
+// reason arrow-key navigation does not flood a single-threaded server.
+constexpr int kOccurrenceDebounceMs = 250;
 }
 
 EditorView::EditorView(QWidget* parent)
@@ -75,6 +92,48 @@ EditorView::EditorView(QWidget* parent)
         emit hoverEnded();
     });
 
+    // The dedicated userListSelection() signal carries no arguments (see
+    // ScintillaEditBase.h: "Wants some args."), and the selection arrives as
+    // *text* rather than an index. The generic notify() hook is the only place
+    // both the chosen string and the list type are available.
+    connect(sci_, &ScintillaEditBase::notify, this,
+            [this](Scintilla::NotificationData* scn) {
+        if (!scn || scn->nmhdr.code != Scintilla::Notification::UserListSelection) return;
+        if (scn->listType != kOutlineListType) return;  // a placeholder row
+        const int index = outlineRows_.indexOf(QString::fromUtf8(scn->text));
+        if (index < 0 || index >= outlineSymbols_.size()) return;
+        const LspSymbol& sym = outlineSymbols_.at(index);
+        emit outlineSymbolChosen(sym.selection.startLine, sym.selection.startCharacter);
+    });
+
+    occurrenceDebounce_ = new QTimer(this);
+    occurrenceDebounce_->setSingleShot(true);
+    occurrenceDebounce_->setInterval(kOccurrenceDebounceMs);
+    connect(occurrenceDebounce_, &QTimer::timeout, this, [this] {
+        LspManager::instance()->requestDocumentHighlights(
+            this, cursorPos(), [this](const QVector<LspRange>& ranges) {
+                setOccurrences(ranges);
+            });
+    });
+
+    connect(sci_, &ScintillaEditBase::updateUi, this, [this](Scintilla::Update updated) {
+        // Selection covers caret movement too; scroll and style updates are
+        // filtered out so merely scrolling does not cost a request.
+        //
+        // Scintilla::Update is a scoped enum with no bitwise operators, so the
+        // flag test goes through the underlying type.
+        using U = std::underlying_type_t<Scintilla::Update>;
+        if (!(static_cast<U>(updated) & static_cast<U>(Scintilla::Update::Selection))) return;
+        // The old set describes wherever the caret used to be. Dropping it now
+        // rather than on reply means the highlight never lags the caret.
+        clearOccurrences();
+        // Only Turmeric buffers with a path are registered with the server;
+        // for the other eight languages the request would round-trip to an
+        // unconditional empty answer on every caret settle.
+        if (language_ != Language::Turmeric || path_.isEmpty()) return;
+        occurrenceDebounce_->start();  // restarts, coalescing bursts
+    });
+
     attachLanguageServer();
 }
 
@@ -105,6 +164,11 @@ void EditorView::attachLanguageServer() {
     connect(this, &EditorView::hoverRequested, lsp, [this, lsp](int pos) {
         lsp->requestHover(this, pos, [this, pos](const QString& text) {
             showHover(pos, text);
+        });
+    });
+    connect(this, &EditorView::definitionRequested, lsp, [this, lsp](int pos) {
+        lsp->requestDefinition(this, pos, [this](const LspLocation& location) {
+            emit definitionResolved(location);
         });
     });
 
@@ -230,10 +294,18 @@ bool EditorView::loadFile(const QString& path) {
         return false;
     }
     const QByteArray contents = file.readAll();
+    // Any previous read-only state has to come off before setText, which
+    // Scintilla ignores on a read-only document — otherwise reusing a tab that
+    // once held a stdlib file would silently load nothing.
+    sci_->setReadOnly(false);
     sci_->setText(contents.constData());
     sci_->emptyUndoBuffer();
     sci_->setSavePoint();
     setPath(path);
+    // Applied here rather than at each call site: three code paths load a file
+    // into a buffer, and a stdlib file that arrived through the one that forgot
+    // would be quietly editable.
+    sci_->setReadOnly(LspManager::instance()->isStdlibPath(path));
     emit modifiedChanged(false);
     return true;
 }
@@ -292,6 +364,14 @@ std::pair<int, int> EditorView::selectionRange() const {
 
 void EditorView::setText(const QByteArray& t) {
     sci_->setText(t.constData());
+}
+
+void EditorView::setReadOnly(bool readOnly) {
+    sci_->setReadOnly(readOnly);
+}
+
+bool EditorView::isReadOnly() const {
+    return sci_->readOnly();
 }
 
 int EditorView::cursorPos() const {
@@ -383,6 +463,33 @@ void EditorView::setDiagnostics(const QVector<LspDiagnostic>& diagnostics) {
     }
 }
 
+void EditorView::clearOccurrences() {
+    if (occurrences_.isEmpty()) return;
+    occurrences_.clear();
+    sci_->setIndicatorCurrent(occurrence::kIndicator);
+    sci_->indicatorClearRange(0, sci_->textLength());
+}
+
+void EditorView::setOccurrences(const QVector<LspRange>& ranges) {
+    // Clear unconditionally rather than via clearOccurrences(), which
+    // short-circuits on an empty cache — the widget can still hold paint from a
+    // set this object no longer remembers (a theme reapply, a reload).
+    sci_->setIndicatorCurrent(occurrence::kIndicator);
+    sci_->indicatorClearRange(0, sci_->textLength());
+    occurrences_ = ranges;
+
+    const int docEnd = static_cast<int>(sci_->textLength());
+    for (const LspRange& r : occurrences_) {
+        // Clamped into the document as it stands now: the buffer may have been
+        // edited between the request and this reply, and an out-of-range fill
+        // would either assert or paint garbage.
+        const int start = qBound(0, posFromLineCol(r.startLine, r.startCharacter), docEnd);
+        const int end = qBound(0, posFromLineCol(r.endLine, r.endCharacter), docEnd);
+        if (end <= start) continue;
+        sci_->indicatorFillRange(start, end - start);
+    }
+}
+
 QString EditorView::diagnosticMessageAt(int pos) const {
     for (const LspDiagnostic& d : diagnostics_) {
         const auto [start, end] = rangeForDiagnostic(d);
@@ -408,6 +515,103 @@ void EditorView::showCompletions(const QStringList& labels, int lengthEntered) {
     sci_->autoCSetChooseSingle(false);
     sci_->autoCSetIgnoreCase(false);
     sci_->autoCShow(lengthEntered, sorted.join('\n').toUtf8().constData());
+}
+
+int EditorView::symbolIndexAtCaret(const QVector<LspSymbol>& symbols) const {
+    const auto [line, col] = lineColFromPos(cursorPos());
+
+    // Pass one: the caret is literally on a name. That is unambiguous and beats
+    // any containment answer, including a nested one.
+    for (int i = 0; i < symbols.size(); ++i) {
+        if (symbols.at(i).selection.contains(line, col)) return i;
+    }
+
+    // Pass two: the smallest range that contains the caret. Smallest, because
+    // with nesting the innermost definition is the one you are editing.
+    //
+    // Dead against the pinned server, and deliberately kept: v0.42.0 reports
+    // `range` identical to `selectionRange` for every symbol — both span the
+    // name alone, never the definition's body — so nothing can contain a caret
+    // that pass one did not already claim. This is the rule c2mp actually uses
+    // and it starts working the day the server reports real extents.
+    int best = -1;
+    long long bestSpan = 0;
+    for (int i = 0; i < symbols.size(); ++i) {
+        const LspRange& r = symbols.at(i).range;
+        if (!r.contains(line, col)) continue;
+        // Line count dominates; the column difference only breaks ties within
+        // a single line, which is why it is added rather than compared.
+        const long long span = (static_cast<long long>(r.endLine - r.startLine) << 20) +
+                               (r.endCharacter - r.startCharacter);
+        if (best < 0 || span < bestSpan) {
+            best = i;
+            bestSpan = span;
+        }
+    }
+    if (best >= 0) return best;
+
+    // Pass three: the last definition starting at or before the caret.
+    //
+    // Only reachable because pass two is currently dead. It answers "which
+    // top-level form am I in" from position alone, which is exactly right for
+    // a file of top-level definitions and degrades to "the one above me" for
+    // anything else. Note this is positional arithmetic over ranges the server
+    // gave us, not a guess about meaning — unlike the textual occurrence
+    // matching §7 rejects, it cannot point at something unrelated.
+    for (int i = symbols.size() - 1; i >= 0; --i) {
+        const LspRange& r = symbols.at(i).selection;
+        if (r.startLine < line || (r.startLine == line && r.startCharacter <= col)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+void EditorView::showSymbolList(const QVector<LspSymbol>& symbols) {
+    outlineSymbols_ = symbols;
+    outlineRows_.clear();
+    if (symbols.isEmpty()) {
+        sci_->autoCCancel();
+        return;
+    }
+
+    for (const LspSymbol& sym : symbols) {
+        const QString kind = LspSymbolKindLabel(sym.kind);
+        outlineRows_ << (kind.isEmpty()
+                             ? sym.name
+                             : sym.name + QString::fromUtf8(kOutlineKindSeparator) + kind);
+    }
+
+    const int current = symbolIndexAtCaret(symbols);
+
+    sci_->autoCSetSeparator('\n');
+    // Document order, not alphabetical. Scintilla sorts by default and would
+    // otherwise scramble the one property the outline exists to show.
+    sci_->autoCSetOrder(SC_ORDER_CUSTOM);
+    sci_->autoCSetIgnoreCase(false);
+    sci_->autoCSetChooseSingle(false);
+    // lengthEntered 0: the outline is not completing a prefix at the caret, so
+    // nothing in the buffer should be treated as already typed.
+    sci_->userListShow(kOutlineListType, outlineRows_.join('\n').toUtf8().constData());
+    if (current >= 0) {
+        sci_->autoCSelect(outlineRows_.at(current).toUtf8().constData());
+    }
+}
+
+void EditorView::showOutlineMessage(const QString& message) {
+    outlineSymbols_.clear();
+    outlineRows_.clear();
+    if (message.isEmpty()) {
+        sci_->autoCCancel();
+        return;
+    }
+    sci_->autoCSetSeparator('\n');
+    sci_->autoCSetOrder(SC_ORDER_CUSTOM);
+    sci_->autoCSetChooseSingle(false);
+    // A separate list type, so the selection handler ignores a click on it. A
+    // user list cannot disable a row, so making the row inert is the next best
+    // thing to greying it out.
+    sci_->userListShow(kOutlineMessageListType, message.toUtf8().constData());
 }
 
 void EditorView::showHover(int pos, const QString& markdown) {

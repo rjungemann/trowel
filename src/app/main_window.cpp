@@ -49,6 +49,12 @@
 
 namespace trowel {
 
+namespace {
+// Depth of the Back stack. Deep enough that a normal exploration session never
+// hits it, shallow enough that it stays a navigation aid rather than a log.
+constexpr int kNavHistoryMax = 20;
+}  // namespace
+
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
 {
@@ -60,6 +66,7 @@ MainWindow::MainWindow(QWidget* parent)
     setupToolBar();
     loadRecentFiles();
     updateEditorActionsEnabled();
+    updateNavActionsEnabled();
     updateWindowTitle();
     // No buffers and no REPL yet — see startSession().
 }
@@ -298,6 +305,36 @@ void MainWindow::setupMenus() {
     connect(showDocAction_, &QAction::triggered, this, &MainWindow::showDocumentation);
     runMenu->addAction(showDocAction_);
 
+    // §6.1 of the navigation plan proposes the Edit menu; Run is where it
+    // actually goes, because that is where Complete Symbol and Show
+    // Documentation already live and Edit is empty. Ctrl+Shift+O is taken by
+    // Open Directory (see :195) and is deliberately not reused.
+    outlineAction_ = new QAction("Show Sy&mbols", this);
+    outlineAction_->setShortcut(QKeySequence("Ctrl+Shift+M"));
+    outlineAction_->setToolTip("List the definitions in this file");
+    connect(outlineAction_, &QAction::triggered, this, &MainWindow::showOutline);
+    runMenu->addAction(outlineAction_);
+
+    gotoDefinitionAction_ = new QAction("&Go to Definition", this);
+    gotoDefinitionAction_->setShortcut(QKeySequence("F12"));
+    gotoDefinitionAction_->setToolTip("Jump to where the symbol at the caret is defined");
+    connect(gotoDefinitionAction_, &QAction::triggered, this, &MainWindow::goToDefinition);
+    runMenu->addAction(gotoDefinitionAction_);
+
+    // Ctrl+Alt+Left/Right is a workspace switcher under several Linux desktops,
+    // so these use VS Code's alternate pair, which nothing here or there claims.
+    navBackAction_ = new QAction("Go &Back", this);
+    navBackAction_->setShortcut(QKeySequence("Ctrl+Alt+-"));
+    navBackAction_->setToolTip("Return to the position before the last jump");
+    connect(navBackAction_, &QAction::triggered, this, &MainWindow::navigateBack);
+    runMenu->addAction(navBackAction_);
+
+    navForwardAction_ = new QAction("Go For&ward", this);
+    navForwardAction_->setShortcut(QKeySequence("Ctrl+Alt+Shift+-"));
+    navForwardAction_->setToolTip("Redo the jump that Back undid");
+    connect(navForwardAction_, &QAction::triggered, this, &MainWindow::navigateForward);
+    runMenu->addAction(navForwardAction_);
+
     restartLspAction_ = new QAction("Restart &Language Server", this);
     restartLspAction_->setToolTip("Restart `tur lsp`");
     connect(restartLspAction_, &QAction::triggered, this, &MainWindow::restartLanguageServer);
@@ -380,6 +417,11 @@ void MainWindow::setupToolBar() {
     if (formatFileAction_) {
         formatFileAction_->setIcon(NerdIcon(NF::AutoFix, glyphSize, iconColor));
         addSideBarAction(formatFileAction_);
+    }
+
+    if (outlineAction_) {
+        outlineAction_->setIcon(NerdIcon(NF::FormatListBulleted, glyphSize, iconColor));
+        addSideBarAction(outlineAction_);
     }
 
     addSideBarSeparator();
@@ -510,7 +552,14 @@ void MainWindow::refreshTabBar() {
     for (int i = 0; i < static_cast<int>(buffers_.size()); ++i) {
         TabContent* v = buffers_[i]->view;
         tabBar_->setModified(i, v && v->isModified());
-        tabBar_->setTooltip(i, v ? v->filePath() : QString());
+        const bool readOnly = v && v->kind() == TabContent::Kind::Editor &&
+                              static_cast<EditorView*>(v)->isReadOnly();
+        tabBar_->setReadOnly(i, readOnly);
+        QString tip = v ? v->filePath() : QString();
+        // Say *why* it is locked. "(ro)" alone invites a bug report; naming the
+        // bundle explains that the file is Trowel's, not the user's.
+        if (readOnly) tip += QStringLiteral("\nRead-only: bundled Turmeric stdlib");
+        tabBar_->setTooltip(i, tip);
     }
 }
 
@@ -561,6 +610,28 @@ void MainWindow::connectBufferSignals(int index) {
     connect(LspManager::instance(), &LspManager::diagnosticsUpdated, this,
             [this, editor](const QString&) {
         if (editor == editorView()) updateDiagnosticStatus();
+    });
+    // The reply may arrive after the user switched tabs. Acting on it then
+    // would yank them somewhere they did not ask to go, so it is dropped —
+    // the manager's staleness guard covers edits, this covers focus.
+    connect(editor, &EditorView::definitionResolved, this,
+            [this, editor](const LspLocation& location) {
+        if (editor != editorView()) return;
+        jumpToDefinition(location);
+    });
+    // An outline pick is a jump like any other, so it goes on the same history
+    // stack — Back after using the outline returns where you were.
+    connect(editor, &EditorView::outlineSymbolChosen, this,
+            [this, editor](int line, int character) {
+        if (editor != editorView()) return;
+        const NavEntry origin = currentNavEntry();
+        editor->setCursorPos(editor->posFromLineCol(line, character));
+        editor->sciWidget()->scrollCaret();
+        if (origin.path.isEmpty()) return;
+        navBack_.append(origin);
+        while (navBack_.size() > kNavHistoryMax) navBack_.removeFirst();
+        navForward_.clear();
+        updateNavActionsEnabled();
     });
 }
 
@@ -799,10 +870,16 @@ EvalMode MainWindow::currentEvalMode() const {
 }
 
 void MainWindow::updateEditorActionsEnabled() {
-    const bool hasEditor = editorView() != nullptr;
-    if (saveAction_) saveAction_->setEnabled(hasEditor);
+    EditorView* active = editorView();
+    const bool hasEditor = active != nullptr;
+    // Save and Format both write. Offering them on a locked buffer and failing
+    // afterwards is the save-error UI §5.3 rejects in favour of the lock.
+    // Save As still works — copying a stdlib file somewhere writable is a
+    // perfectly good thing to want.
+    const bool writable = hasEditor && !active->isReadOnly();
+    if (saveAction_) saveAction_->setEnabled(writable);
     if (saveAsAction_) saveAsAction_->setEnabled(hasEditor);
-    if (formatFileAction_) formatFileAction_->setEnabled(hasEditor);
+    if (formatFileAction_) formatFileAction_->setEnabled(writable);
     if (pickFontAction_) pickFontAction_->setEnabled(hasEditor);
 
     // Evaluation only makes sense for Turmeric documents. A `build.tur` is a
@@ -830,10 +907,32 @@ void MainWindow::updateEditorActionsEnabled() {
                 ? QStringLiteral("Evaluate Selection")
                 : QStringLiteral("Evaluation is only available for Turmeric files"));
     }
+
+    // Trowel highlights nine languages and has a language server for one. F12
+    // that silently does nothing in a .py file is a bug report; greying it out
+    // says which files it works on.
+    const bool servedByLsp = hasEditor && mode != EvalMode::Disabled;
+    if (gotoDefinitionAction_) {
+        gotoDefinitionAction_->setEnabled(servedByLsp);
+        gotoDefinitionAction_->setToolTip(
+            servedByLsp
+                ? QStringLiteral("Jump to where the symbol at the caret is defined")
+                : QStringLiteral("Go to Definition is only available for Turmeric files"));
+    }
+    if (outlineAction_) {
+        outlineAction_->setEnabled(servedByLsp);
+        outlineAction_->setToolTip(
+            servedByLsp
+                ? QStringLiteral("List the definitions in this file")
+                : QStringLiteral("Symbols is only available for Turmeric files"));
+    }
 }
 
 void MainWindow::rememberRecentFile(const QString& path) {
     if (path.isEmpty()) return;
+    // "Open Recent ▸ list.tur" landing in an unwritable file inside the app
+    // bundle is a puzzle, not a feature.
+    if (isStdlibPath(path)) return;
     const QString abs = QFileInfo(path).absoluteFilePath();
     recentFiles_.removeAll(abs);
     recentFiles_.prepend(abs);
@@ -1174,6 +1273,186 @@ void MainWindow::showDocumentation() {
     emit v->hoverRequested(v->cursorPos());
 }
 
+void MainWindow::goToDefinition() {
+    EditorView* v = editorView();
+    if (!v) { emit definitionJumpFinished(false); return; }
+    if (v->filePath().isEmpty()) {
+        statusBar()->show();
+        statusBar()->showMessage(LspManager::kSkipUnsavedReason, 4000);
+        emit definitionJumpFinished(false);
+        return;
+    }
+    emit v->definitionRequested(v->cursorPos());
+}
+
+void MainWindow::showOutline() {
+    EditorView* v = editorView();
+    if (!v) { emit outlineReady({}, QStringLiteral("no editor")); return; }
+
+    // An unsaved buffer has no URI, so the server has never seen it. Reported
+    // the way completion and documentation already report it.
+    if (v->filePath().isEmpty()) {
+        statusBar()->show();
+        statusBar()->showMessage(LspManager::kSkipUnsavedReason, 4000);
+        v->showOutlineMessage(QString::fromUtf8(LspManager::kSkipUnsavedReason));
+        emit outlineReady({}, QString::fromUtf8(LspManager::kSkipUnsavedReason));
+        return;
+    }
+
+    LspManager* lsp = LspManager::instance();
+    if (lsp->state() != LspManager::State::Ready) {
+        // An empty outline would imply an empty file. A Trowel user may not
+        // know a language server exists, so name it rather than showing
+        // nothing.
+        const QString reason = QStringLiteral("Language server is not ready");
+        statusBar()->show();
+        statusBar()->showMessage(reason, 4000);
+        v->showOutlineMessage(reason);
+        emit outlineReady({}, reason);
+        return;
+    }
+
+    lsp->requestDocumentSymbols(v, [this, v](const QVector<LspSymbol>& symbols) {
+        // The user may have switched tabs while the request was in flight;
+        // popping a list over a different buffer would be worse than nothing.
+        if (v != editorView()) return;
+
+        if (!symbols.isEmpty()) {
+            v->showSymbolList(symbols);
+            emit outlineReady(symbols, QString());
+            return;
+        }
+
+        // Empty has two very different causes and §4.2.1 measured that the
+        // second is the common one: any analysis error empties documentSymbol
+        // for the whole file. Blaming the file for defining nothing when it
+        // actually failed to compile is the same lie the unavailable-server
+        // case avoids.
+        LspManager* mgr = LspManager::instance();
+        const QString uri = LspManager::UriForPath(v->filePath());
+        const bool brokenFile =
+            mgr->hasPublishedFor(uri) && !mgr->diagnosticsFor(uri).isEmpty();
+        const QString reason = brokenFile
+                                   ? QStringLiteral("Not analyzed — fix errors first")
+                                   : QStringLiteral("Nothing defined yet");
+        v->showOutlineMessage(reason);
+        emit outlineReady({}, reason);
+    });
+}
+
+bool MainWindow::isStdlibPath(const QString& path) {
+    // Delegated rather than re-derived: two independent derivations of the
+    // stdlib directory drift the moment TROWEL_TURMERIC_VERSION moves.
+    return LspManager::instance()->isStdlibPath(path);
+}
+
+MainWindow::NavEntry MainWindow::currentNavEntry() const {
+    EditorView* v = editorView();
+    if (!v) return {};
+    return NavEntry{v->filePath(), v->cursorPos()};
+}
+
+bool MainWindow::goToNavEntry(const NavEntry& entry) {
+    if (entry.path.isEmpty()) return false;
+    if (!QFileInfo::exists(entry.path)) return false;
+    const QString abs = QFileInfo(entry.path).absoluteFilePath();
+    if (const int existing = indexOfPath(abs); existing >= 0) {
+        activateBuffer(existing);
+    } else if (!openPath(abs)) {
+        return false;
+    }
+    EditorView* v = editorView();
+    if (!v) return false;
+    v->setCursorPos(entry.pos);
+    v->sciWidget()->scrollCaret();
+    return true;
+}
+
+void MainWindow::jumpToDefinition(const LspLocation& location) {
+    statusBar()->show();
+    if (!location.isValid()) {
+        // §4.2.1: the server also answers null for every name in a file that
+        // failed to analyze, so point at that rather than only at the symbol.
+        statusBar()->showMessage("No definition found (is the file free of errors?)", 4000);
+        emit definitionJumpFinished(false);
+        return;
+    }
+
+    const QString target = LspManager::PathForUri(location.uri);
+    if (target.isEmpty()) {
+        statusBar()->showMessage("Definition is not in a local file", 4000);
+        emit definitionJumpFinished(false);
+        return;
+    }
+    if (!QFileInfo::exists(target)) {
+        statusBar()->showMessage(QString("Definition file is missing: %1").arg(target), 5000);
+        emit definitionJumpFinished(false);
+        return;
+    }
+
+    // Push before moving, so Back returns to where the user actually was.
+    const NavEntry origin = currentNavEntry();
+
+    const QString abs = QFileInfo(target).absoluteFilePath();
+    if (const int existing = indexOfPath(abs); existing >= 0) {
+        // Cases 1 and 2 in one: the same document is just the tab that is
+        // already active, so activating it is a no-op and no tab churns.
+        activateBuffer(existing);
+    } else if (!openPath(abs)) {
+        statusBar()->showMessage(QString("Could not open %1").arg(abs), 5000);
+        emit definitionJumpFinished(false);
+        return;
+    }
+
+    EditorView* v = editorView();
+    if (!v) { emit definitionJumpFinished(false); return; }
+    v->setCursorPos(v->posFromLineCol(location.line, location.character));
+    v->sciWidget()->scrollCaret();
+
+    if (!origin.path.isEmpty()) {
+        navBack_.append(origin);
+        while (navBack_.size() > kNavHistoryMax) navBack_.removeFirst();
+        // A fresh jump invalidates whatever Forward was pointing at.
+        navForward_.clear();
+        updateNavActionsEnabled();
+    }
+    statusBar()->clearMessage();
+    // Tab set and caret are both final by here, so an awaiting caller sees a
+    // settled window rather than one mid-jump.
+    emit definitionJumpFinished(true);
+}
+
+void MainWindow::navigateBack() {
+    // Skip entries whose file has since been deleted rather than erroring: the
+    // stack is a convenience, and one dead entry should not block the rest.
+    while (!navBack_.isEmpty()) {
+        const NavEntry entry = navBack_.takeLast();
+        const NavEntry here = currentNavEntry();
+        if (goToNavEntry(entry)) {
+            if (!here.path.isEmpty()) navForward_.append(here);
+            break;
+        }
+    }
+    updateNavActionsEnabled();
+}
+
+void MainWindow::navigateForward() {
+    while (!navForward_.isEmpty()) {
+        const NavEntry entry = navForward_.takeLast();
+        const NavEntry here = currentNavEntry();
+        if (goToNavEntry(entry)) {
+            if (!here.path.isEmpty()) navBack_.append(here);
+            break;
+        }
+    }
+    updateNavActionsEnabled();
+}
+
+void MainWindow::updateNavActionsEnabled() {
+    if (navBackAction_) navBackAction_->setEnabled(!navBack_.isEmpty());
+    if (navForwardAction_) navForwardAction_->setEnabled(!navForward_.isEmpty());
+}
+
 void MainWindow::restartLanguageServer() {
     LspManager::instance()->restart();
     statusBar()->show();
@@ -1485,6 +1764,14 @@ QVariantMap MainWindow::sessionState() const {
         if (!v) continue;
         const QString path = v->filePath();
         if (path.isEmpty()) continue;  // Untitled buffers have nothing to point at
+        // A stdlib path is stable across upgrades, so restoring one would
+        // silently present *last version's* stdlib as current after a
+        // TROWEL_TURMERIC_VERSION bump. Stale and indistinguishable from fresh
+        // is worse than absent.
+        //
+        // Skipped before activeInList is set, so dropping the active tab cannot
+        // leave the index pointing at whichever buffer happened to follow it.
+        if (isStdlibPath(path)) continue;
         if (i == activeIndex_) activeInList = openPaths.size();
         if (v->kind() == TabContent::Kind::Directory) {
             openPaths << (QStringLiteral("dir://") + path);

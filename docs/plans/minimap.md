@@ -250,8 +250,21 @@ Once the base render is trusted (phase 4), overlay lanes on top of the strips:
   a minimap at all on a long file.
 - **Selection** — fill selected lines with `theme.selectionBg` at low alpha.
 - **Caret line** — 1px `theme.caret` rule.
+- **Occurrences** — the one lane [`lsp-navigation.md`](lsp-navigation.md) §2
+  adds. `EditorView::occurrences()` holds the ranges for the symbol under the
+  caret; wash them with `theme.occurrenceHighlight` rather than filling them.
+  c2mp's reasoning applies unchanged: *the token colours underneath have to stay
+  legible, and a mark that hides the code it marks defeats the purpose.*
 
-All three are painted in `paintEvent` over the cached image, never baked into it, so
+  **The ordering constraint this lane came with is now satisfied.** It said the
+  lane must never be fed by word-based matching — `total` inside `subtotal`,
+  inside a comment, inside a string — because a wrong answer under the caret is
+  survivable while the same answer painted down the whole file is not. The
+  source is now `textDocument/documentHighlight`, which is token-based and
+  measurably excludes comments and strings, so the lane is safe to build. Read
+  `occurrences()`; do not re-derive matches here.
+
+All four are painted in `paintEvent` over the cached image, never baked into it, so
 they cost nothing to invalidate.
 
 ## Theme integration
