@@ -10,7 +10,14 @@ Expands on [`PLAN.md`](PLAN.md) §11, which sketched this work but deferred it.
 > **Status:** phase 1 has landed — diagnostics, completion, and hover all work
 > against the bundled `tur lsp`, covered by 12 smoke tests in
 > `tests/smoke/test_lsp.py`. Where the implementation departed from this plan,
-> see [Deviations](#deviations-from-this-plan). Phase 2 is not started.
+> see [Deviations](#deviations-from-this-plan). Phase 2 landed upstream and has
+> been consumed by bumping the pin to `v0.42.0`; see
+> [Phase 2](#phase-2--turmeric-server-improvements-turmericdoc-stuff) for what
+> is done and what is left.
+>
+> **Follow-ups:** [`lsp-navigation.md`](lsp-navigation.md) (definition, outline,
+> occurrences) and [`editor-intelligence.md`](editor-intelligence.md) (rename,
+> references, the tracer, bracket-pair guides).
 
 ## Context
 
@@ -271,24 +278,39 @@ response at all**, hanging a conforming client. All requests now get an answer
 (`-32602`), via a new shared `send_error` helper that also replaced the
 open-coded method-not-found path.
 
-### Not started
+### Done since this list was written
 
-3. **`textDocument/signatureHelp`** — the calltip logic already exists, unwired,
-   in `src/cli/lsp_lite.c` (`calltip` method).
-4. **`textDocument/formatting`** backed by `tur format`. Today VS Code shells out
-   client-side (`vscode-syntax-ext/extension.js:11-34`) and Trowel blocks the UI
-   doing the same in `MainWindow::formatFile()`.
-6. **Incremental sync** (`textDocumentSync: 2`). `on_did_change` reads only
-   `contentChanges[0].text` and would silently mishandle ranges. Lower value now
-   that full-sync analysis is debounced.
+Landed upstream after the Done/Not-started split above, and picked up by the
+pin bumps to `v0.39.0` and then `v0.42.0`. Verified by probing the staged
+binary, not read from a changelog:
 
-Also still open, and the reason mid-typing completion is weak: completion is
-driven by the last **successful** compile, so an unbalanced paren — the normal
-state while typing — yields no symbols at all.
+3. **`textDocument/signatureHelp`** — advertised, trigger character `(`.
+   Not yet consumed by Trowel; `callTipShow` is already wired for hover.
+4. **`textDocument/formatting`** — advertised, and it runs *in-process* rather
+   than shelling out. `MainWindow::formatFile()` still blocks the UI running
+   `tur format`; switching it to the request is a small, self-contained win.
+
+Also fixed: completion no longer collapses on an unbalanced paren. It degrades
+in two tiers — the last good index if the document has ever parsed, and a
+process-wide stdlib-only fallback if it never has — so mid-typing completion is
+no longer weak for the reason this plan recorded.
+
+Two further capabilities arrived that this plan never listed, because they did
+not exist when it was written: scope-aware `documentHighlight`, and
+`rename` / `references` over a real lexical scope resolver. Together with the
+`tur trace` recorder they are the subject of
+[`editor-intelligence.md`](editor-intelligence.md).
+
+### Still not started
+
+6. **Incremental sync** (`textDocumentSync: 2`). Confirmed still `1` (full) in
+   `v0.42.0`. `on_did_change` reads only `contentChanges[0].text` and would
+   silently mishandle ranges. Lower value now that full-sync analysis is
+   debounced.
 
 Consuming any of this in Trowel means cutting a Turmeric release, then bumping
 `TROWEL_TURMERIC_VERSION` **and all three per-arch SHA-256s** in
-`CMakeLists.txt:109-125`.
+`CMakeLists.txt:119-136`. The pin is currently **`v0.42.0`**.
 
 ---
 

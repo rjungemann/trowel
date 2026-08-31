@@ -15,14 +15,18 @@ JSON-RPC-over-stdio transport this reuses.
 
 **Turmeric has a working debugger today.** This is not speculative — it landed
 upstream in v0.25.2 and was upgraded in v0.25.6, and Trowel already bundles a
-binary that carries it (`TROWEL_TURMERIC_VERSION "v0.32.6"`,
-`CMakeLists.txt:113`). Verified empirically against the staged binary: `tur dap`
+binary that carries it (`TROWEL_TURMERIC_VERSION`, `CMakeLists.txt:119`, now
+**`v0.42.0`**). Verified empirically against the staged binary: `tur dap`
 answers `initialize` with
 
 ```json
 {"supportsConfigurationDoneRequest": true, "supportsConditionalBreakpoints": true,
- "supportsEvaluateForHovers": true, "supportsTerminateRequest": true}
+ "supportsEvaluateForHovers": true, "supportsStepBack": true,
+ "supportsReverseContinue": true, "supportsTerminateRequest": true}
 ```
+
+(The two `supports*` reverse-execution flags are new since this plan was
+written; see constraint 8.)
 
 followed by an `initialized` event.
 
@@ -86,7 +90,13 @@ design, so they come before the design.
    a string. `scopes` returns exactly one `Locals` scope whose reference is
    `frameId + 1`.
 8. **No `setVariable`, no `source`, no real exception or function breakpoints,
-   no data breakpoints, no `restart`, no `stepBack`.**
+   no data breakpoints, no `restart`.** ~~No `stepBack`.~~ **Stale as of the
+   `v0.42.0` pin:** the adapter now advertises `supportsStepBack` and
+   `supportsReverseContinue`, served from a recording when `launch` carries
+   `"replay": true`. In replay, `evaluate` refuses (there is no live frame) and
+   conditional breakpoints degrade to unconditional. See
+   [`editor-intelligence.md`](editor-intelligence.md) §5, which depends on
+   phases 1–3 of this plan.
 9. **No debuggee stdin.** The debuggee's stdout is redirected to a pipe
    (best-effort 1 MiB) and drained at every stop into `output` events. **stderr
    is not captured** — it goes to the adapter's own stderr. A program writing
