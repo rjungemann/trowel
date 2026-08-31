@@ -92,6 +92,41 @@ public:
     // through the server rather than through Scintilla's word matching.
     void requestDocumentHighlights(EditorView* view, int pos, HighlightsCallback cb);
 
+    using ReferencesCallback = std::function<void(const QVector<LspSpan>&)>;
+    // Every real use of the symbol at `pos`, across the workspace.
+    //
+    // An oversized workspace answers with a *shorter list*, not an error, so a
+    // caller can never prove the list is complete — label the UI accordingly.
+    void requestReferences(EditorView* view, int pos, bool includeDeclaration,
+                           ReferencesCallback cb);
+
+    // The answer to "may I rename what is at this position, and what is it
+    // called now".
+    //
+    // Three states, because the server has three (§3.1.1 of the editor
+    // intelligence plan): a range means yes; `refusal` carries the server's own
+    // words for the seven documented no-cases, which arrive as JSON-RPC errors;
+    // both empty means there was simply nothing at that position.
+    struct PrepareRename {
+        LspRange range;
+        QString placeholder;
+        QString refusal;
+        bool renameable = false;
+    };
+    using PrepareRenameCallback = std::function<void(const PrepareRename&)>;
+    void requestPrepareRename(EditorView* view, int pos, PrepareRenameCallback cb);
+
+    // Empty edit with a non-empty `error` when the server refused; empty with
+    // an empty error means it had nothing to change.
+    using WorkspaceEdit = LspWorkspaceEdit;
+    using RenameCallback =
+        std::function<void(const WorkspaceEdit& edit, const QString& error)>;
+    // Rename is the most expensive request in the protocol — the workspace half
+    // compiles every importing file for its own binding table before editing it
+    // — so this one gets its own budget rather than the 2 s default.
+    void requestRename(EditorView* view, int pos, const QString& newName,
+                       RenameCallback cb);
+
     // Directory the bundled stdlib was pinned to, or empty when none was found
     // next to the resolved binary.
     //

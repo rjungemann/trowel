@@ -1,0 +1,7 @@
+;; A program that genuinely does almost nothing: `main` exists, runs, and
+;; evaluates three expressions. Distinct from trace_nomain.tur (no `main` at
+;; all) and from trace_broken.tur (never compiled), and the reason the
+;; short-recording outcome still means something under per-expression
+;; granularity.
+(defn main [] : int
+  (+ 1 2))

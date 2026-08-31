@@ -1,0 +1,4 @@
+;; Manifest for the cross-file rename fixture. `tur lsp` resolves the
+;; module search path from here, so the workspace half of rename only works
+;; when this file exists.
+(defpackage renamews)

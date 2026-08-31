@@ -10,6 +10,7 @@
 #include "editor/theme_loader.h"
 #include "lsp/lsp_manager.h"
 #include "repl/project_runner.h"
+#include "trace/trace_runner.h"
 #include "repl/repl_session.h"
 
 #include <ScintillaEdit.h>
@@ -53,6 +54,10 @@ namespace {
 // Depth of the Back stack. Deep enough that a normal exploration session never
 // hits it, shallow enough that it stays a navigation aid rather than a log.
 constexpr int kNavHistoryMax = 20;
+// Above this many documents, a rename asks first and lists them. A cross-file
+// rename is the most destructive thing this editor can do, and the number of
+// files is the only advance warning the user gets about how far it reaches.
+constexpr int kRenameConfirmThreshold = 20;
 }  // namespace
 
 MainWindow::MainWindow(QWidget* parent)
@@ -266,6 +271,12 @@ void MainWindow::setupMenus() {
     connect(runSelectionAction_, &QAction::triggered, this, &MainWindow::runSelection);
     runMenu->addAction(runSelectionAction_);
 
+    traceAction_ = new QAction("&Trace Buffer", this);
+    traceAction_->setShortcut(QKeySequence("Ctrl+Shift+T"));
+    traceAction_->setToolTip("Record an execution trace with `tur trace`");
+    connect(traceAction_, &QAction::triggered, this, &MainWindow::traceBuffer);
+    runMenu->addAction(traceAction_);
+
     runMenu->addSeparator();
 
     restartReplAction_ = new QAction("Res&tart REPL", this);
@@ -320,6 +331,18 @@ void MainWindow::setupMenus() {
     gotoDefinitionAction_->setToolTip("Jump to where the symbol at the caret is defined");
     connect(gotoDefinitionAction_, &QAction::triggered, this, &MainWindow::goToDefinition);
     runMenu->addAction(gotoDefinitionAction_);
+
+    findReferencesAction_ = new QAction("Find &References", this);
+    findReferencesAction_->setShortcut(QKeySequence("Shift+F12"));
+    findReferencesAction_->setToolTip("List every use of the symbol at the caret");
+    connect(findReferencesAction_, &QAction::triggered, this, &MainWindow::findReferences);
+    runMenu->addAction(findReferencesAction_);
+
+    renameAction_ = new QAction("Re&name Symbol", this);
+    renameAction_->setShortcut(QKeySequence("F2"));
+    renameAction_->setToolTip("Rename the symbol at the caret across the workspace");
+    connect(renameAction_, &QAction::triggered, this, &MainWindow::renameSymbol);
+    runMenu->addAction(renameAction_);
 
     // Ctrl+Alt+Left/Right is a workspace switcher under several Linux desktops,
     // so these use VS Code's alternate pair, which nothing here or there claims.
@@ -627,11 +650,23 @@ void MainWindow::connectBufferSignals(int index) {
         const NavEntry origin = currentNavEntry();
         editor->setCursorPos(editor->posFromLineCol(line, character));
         editor->sciWidget()->scrollCaret();
-        if (origin.path.isEmpty()) return;
-        navBack_.append(origin);
-        while (navBack_.size() > kNavHistoryMax) navBack_.removeFirst();
-        navForward_.clear();
-        updateNavActionsEnabled();
+        pushNavHistory(origin);
+    });
+    // The references chooser reports a row index; the span it stands for lives
+    // in referenceSpans_, which was filled when the list was shown.
+    connect(editor, &EditorView::listRowChosen, this, [this, editor](int row) {
+        if (editor != editorView()) return;
+        if (row < 0 || row >= referenceSpans_.size()) return;
+        jumpToSpan(referenceSpans_.at(row));
+    });
+    connect(editor, &EditorView::renameCommitted, this,
+            [this, editor](const QString& newName) {
+        if (editor != editorView()) return;
+        applyRename(editor, newName);
+    });
+    connect(editor, &EditorView::renameCancelled, this, [this, editor] {
+        if (editor != editorView()) return;
+        emit renameFinished(0, QStringLiteral("rename cancelled"));
     });
 }
 
@@ -900,6 +935,15 @@ void MainWindow::updateEditorActionsEnabled() {
                     : QStringLiteral("Evaluation is only available for Turmeric files"));
         }
     }
+    if (traceAction_) {
+        // Same gate as Run Buffer: a manifest is traceable in the sense that
+        // it is Turmeric, but there is nothing to enter.
+        traceAction_->setEnabled(mode == EvalMode::Buffer);
+        traceAction_->setToolTip(
+            mode == EvalMode::Buffer
+                ? QStringLiteral("Record an execution trace with `tur trace`")
+                : QStringLiteral("Tracing is only available for Turmeric files"));
+    }
     if (runSelectionAction_) {
         runSelectionAction_->setEnabled(mode == EvalMode::Buffer);
         runSelectionAction_->setToolTip(
@@ -925,6 +969,24 @@ void MainWindow::updateEditorActionsEnabled() {
             servedByLsp
                 ? QStringLiteral("List the definitions in this file")
                 : QStringLiteral("Symbols is only available for Turmeric files"));
+    }
+    if (findReferencesAction_) {
+        findReferencesAction_->setEnabled(servedByLsp);
+        findReferencesAction_->setToolTip(
+            servedByLsp
+                ? QStringLiteral("List every use of the symbol at the caret")
+                : QStringLiteral("Find References is only available for Turmeric files"));
+    }
+    if (renameAction_) {
+        // Also off for a read-only stdlib buffer: the server refuses to rename
+        // stdlib symbols anyway, and greying it out says so before the round
+        // trip rather than after it.
+        const bool renameable = servedByLsp && writable;
+        renameAction_->setEnabled(renameable);
+        renameAction_->setToolTip(
+            renameable
+                ? QStringLiteral("Rename the symbol at the caret across the workspace")
+                : QStringLiteral("Rename is only available for writable Turmeric files"));
     }
 }
 
@@ -1196,6 +1258,43 @@ void MainWindow::runProject() {
     statusBar()->showMessage(r.message, 4000);
 }
 
+void MainWindow::traceBuffer() {
+    EditorView* v = editorView();
+    if (!v) return;
+    if (EvalModeForPath(v->filePath()) == EvalMode::Disabled) {
+        statusBar()->show();
+        statusBar()->showMessage("Tracing is only available for Turmeric files.", 4000);
+        emit traceFinished(TraceOutcome::Failed, TraceSummary{},
+                           QStringLiteral("Tracing is only available for Turmeric files."));
+        return;
+    }
+    // `tur trace` reads the file from disk, so an unsaved edit would trace the
+    // previous version — the same trap runProject() avoids.
+    if (v->filePath().isEmpty() || (v->isModified() && !save())) {
+        statusBar()->show();
+        statusBar()->showMessage("Save the file before tracing it.", 4000);
+        emit traceFinished(TraceOutcome::Failed, TraceSummary{},
+                           QStringLiteral("Save the file before tracing it."));
+        return;
+    }
+    if (!traceRunner_) {
+        traceRunner_ = new TraceRunner(terminal_, this);
+        connect(traceRunner_, &TraceRunner::finished, this,
+                [this](TraceOutcome outcome, const TraceSummary& summary,
+                       const QString& explanation) {
+            statusBar()->show();
+            // The explanation, not the step count: "2 steps" on its own is the
+            // reading that makes a user conclude the tracer is broken.
+            statusBar()->showMessage(explanation, 10000);
+            emit traceFinished(outcome, summary, explanation);
+        });
+    }
+    const RunResult r = traceRunner_->run(v->filePath());
+    statusBar()->show();
+    statusBar()->showMessage(r.message, 4000);
+    if (!r.ok) emit traceFinished(TraceOutcome::Failed, TraceSummary{}, r.message);
+}
+
 void MainWindow::runSelection() {
     EditorView* v = editorView();
     if (!v) return;
@@ -1340,6 +1439,252 @@ void MainWindow::showOutline() {
     });
 }
 
+void MainWindow::findReferences() {
+    EditorView* v = editorView();
+    if (!v) { emit referencesReady({}, QStringLiteral("no editor")); return; }
+    if (v->filePath().isEmpty()) {
+        statusBar()->show();
+        statusBar()->showMessage(LspManager::kSkipUnsavedReason, 4000);
+        emit referencesReady({}, QString::fromUtf8(LspManager::kSkipUnsavedReason));
+        return;
+    }
+    LspManager* lsp = LspManager::instance();
+    if (lsp->state() != LspManager::State::Ready) {
+        const QString reason = QStringLiteral("Language server is not ready");
+        statusBar()->show();
+        statusBar()->showMessage(reason, 4000);
+        emit referencesReady({}, reason);
+        return;
+    }
+
+    // includeDeclaration: the declaration is usually the thing being looked for.
+    lsp->requestReferences(v, v->cursorPos(), /*includeDeclaration=*/true,
+                           [this, v](const QVector<LspSpan>& spans) {
+        if (v != editorView()) return;
+        referenceSpans_ = spans;
+        if (spans.isEmpty()) {
+            const QString reason = QStringLiteral("No references found");
+            v->showOutlineMessage(reason);
+            statusBar()->show();
+            statusBar()->showMessage(reason, 4000);
+            emit referencesReady({}, reason);
+            return;
+        }
+
+        QStringList rows;
+        rows.reserve(spans.size());
+        for (const LspSpan& span : spans) {
+            const QString path = LspManager::PathForUri(span.uri);
+            const QString name = path.isEmpty() ? span.uri : QFileInfo(path).fileName();
+            QString text;
+            // Prefer an open buffer: it may be dirty, and the reference then
+            // describes what is on screen rather than what is on disk.
+            if (const int idx = indexOfPath(QFileInfo(path).absoluteFilePath()); idx >= 0) {
+                auto* other = qobject_cast<EditorView*>(buffers_[idx]->view);
+                if (other) {
+                    text = QString::fromUtf8(other->text())
+                               .section('\n', span.range.startLine, span.range.startLine);
+                }
+            } else if (QFile file(path); file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                text = QString::fromUtf8(file.readAll())
+                           .section('\n', span.range.startLine, span.range.startLine);
+            }
+            rows << QStringLiteral("%1:%2  %3")
+                        .arg(name)
+                        .arg(span.range.startLine + 1)
+                        .arg(text.trimmed());
+        }
+        v->showChooserList(rows);
+        // "References", never "All references": an oversized workspace returns
+        // a shorter list rather than an error, so completeness cannot be
+        // claimed (§3.1 of the plan).
+        statusBar()->show();
+        statusBar()->showMessage(QStringLiteral("References: %1").arg(spans.size()), 4000);
+        emit referencesReady(spans, QString());
+    });
+}
+
+void MainWindow::renameSymbol() {
+    EditorView* v = editorView();
+    if (!v) { emit renameFinished(0, QStringLiteral("no editor")); return; }
+    if (v->filePath().isEmpty()) {
+        statusBar()->show();
+        statusBar()->showMessage(LspManager::kSkipUnsavedReason, 4000);
+        emit renameFinished(0, QString::fromUtf8(LspManager::kSkipUnsavedReason));
+        return;
+    }
+    LspManager* lsp = LspManager::instance();
+    if (lsp->state() != LspManager::State::Ready) {
+        const QString reason = QStringLiteral("Language server is not ready");
+        statusBar()->show();
+        statusBar()->showMessage(reason, 4000);
+        emit renameFinished(0, reason);
+        return;
+    }
+
+    statusBar()->show();
+    statusBar()->showMessage(QStringLiteral("Checking whether this can be renamed…"), 2000);
+
+    // prepareRename first, always, and before any input is shown. The server's
+    // refusals are written to be read; putting one in front of the user before
+    // they type a new name is the whole reason prepareProvider is advertised.
+    lsp->requestPrepareRename(v, v->cursorPos(),
+                              [this, v](const LspManager::PrepareRename& prep) {
+        if (v != editorView()) return;
+        if (!prep.refusal.isEmpty()) {
+            statusBar()->showMessage(prep.refusal, 8000);
+            emit renameFinished(0, prep.refusal);
+            return;
+        }
+        if (!prep.renameable) {
+            const QString reason = QStringLiteral("No symbol to rename here");
+            statusBar()->showMessage(reason, 4000);
+            emit renameFinished(0, reason);
+            return;
+        }
+        statusBar()->clearMessage();
+        v->showRenameInput(prep.range, prep.placeholder);
+        emit renameInputOpened();
+    });
+}
+
+void MainWindow::applyRename(EditorView* view, const QString& newName) {
+    statusBar()->show();
+    // Rename compiles every importing file, so it is the one request that
+    // routinely takes seconds — and it blocks diagnostics, completion and hover
+    // behind it. Say so rather than looking hung.
+    statusBar()->showMessage(QStringLiteral("Renaming to “%1”…").arg(newName));
+
+    LspManager::instance()->requestRename(
+        view, view->cursorPos(), newName,
+        [this](const LspManager::WorkspaceEdit& edit, const QString& error) {
+            if (!error.isEmpty()) {
+                statusBar()->showMessage(error, 8000);
+                emit renameFinished(0, error);
+                return;
+            }
+            if (edit.isEmpty()) {
+                const QString reason = QStringLiteral("Nothing to rename");
+                statusBar()->showMessage(reason, 4000);
+                emit renameFinished(0, reason);
+                return;
+            }
+
+            // Blast-radius cap. Confirmation lives here rather than inside
+            // applyWorkspaceEdit so the control API can drive the mechanism
+            // without a modal dialog blocking the socket's event loop.
+            if (edit.size() > kRenameConfirmThreshold) {
+                QStringList names;
+                for (auto it = edit.constBegin(); it != edit.constEnd(); ++it) {
+                    names << QFileInfo(LspManager::PathForUri(it.key())).fileName();
+                }
+                names.sort();
+                const auto choice = QMessageBox::question(
+                    this, "Trowel",
+                    QString("Rename across %1 files?\n\n%2")
+                        .arg(edit.size())
+                        .arg(names.join(QStringLiteral(", "))),
+                    QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+                if (choice != QMessageBox::Yes) {
+                    const QString reason = QStringLiteral("rename cancelled");
+                    statusBar()->showMessage(reason, 4000);
+                    emit renameFinished(0, reason);
+                    return;
+                }
+            }
+
+            QString applyError;
+            const int changed = applyWorkspaceEdit(edit, &applyError);
+            if (changed < 0) {
+                statusBar()->showMessage(applyError, 8000);
+                emit renameFinished(0, applyError);
+                return;
+            }
+            const QString ok = changed == 1
+                                   ? QStringLiteral("Renamed in 1 file.")
+                                   : QStringLiteral("Renamed in %1 files.").arg(changed);
+            statusBar()->showMessage(ok, 4000);
+            emit renameFinished(changed, QString());
+        });
+}
+
+int MainWindow::applyWorkspaceEdit(const LspWorkspaceEdit& edit, QString* error) {
+    // Resolve everything first. A half-applied cross-file rename is worse than
+    // a refused one, and the only way to guarantee all-or-nothing is to prove
+    // every document is reachable before touching any of them.
+    struct Target {
+        QString path;
+        QVector<LspTextEdit> edits;
+    };
+    QVector<Target> targets;
+    for (auto it = edit.constBegin(); it != edit.constEnd(); ++it) {
+        const QString path = LspManager::PathForUri(it.key());
+        if (path.isEmpty() || !QFileInfo::exists(path)) {
+            if (error) {
+                *error = QString("Rename touches a file Trowel cannot open (%1); "
+                                 "nothing was changed.").arg(it.key());
+            }
+            return -1;
+        }
+        if (isStdlibPath(path)) {
+            if (error) {
+                *error = QString("Rename would edit the bundled stdlib (%1); "
+                                 "nothing was changed.")
+                             .arg(QFileInfo(path).fileName());
+            }
+            return -1;
+        }
+        targets.append(Target{QFileInfo(path).absoluteFilePath(), it.value()});
+    }
+
+    // Return the user where they were: applying an edit opens tabs, and a
+    // rename that leaves you in a file you never asked to see is disorienting.
+    const int originalIndex = activeIndex_;
+
+    int changed = 0;
+    for (Target& target : targets) {
+        int index = indexOfPath(target.path);
+        if (index < 0) {
+            // No tab: open one and leave it dirty. Writing to disk behind the
+            // user's back is not undoable by Ctrl+Z, and Trowel has no VCS
+            // integration to fall back on.
+            if (!openPath(target.path)) {
+                if (error) {
+                    *error = QString("Could not open %1; some files may already "
+                                     "have been changed.").arg(target.path);
+                }
+                return -1;
+            }
+            index = indexOfPath(target.path);
+        }
+        if (index < 0) continue;
+        auto* view = qobject_cast<EditorView*>(buffers_[index]->view);
+        if (!view) continue;
+
+        // Descending by position, so an edit that changes length cannot
+        // invalidate the ranges of the edits that follow it.
+        std::sort(target.edits.begin(), target.edits.end(),
+                  [](const LspTextEdit& a, const LspTextEdit& b) {
+                      if (a.range.startLine != b.range.startLine) {
+                          return a.range.startLine > b.range.startLine;
+                      }
+                      return a.range.startCharacter > b.range.startCharacter;
+                  });
+
+        // One undo action per document, so Ctrl+Z reverses the whole file's
+        // share of the rename rather than one occurrence at a time.
+        view->beginEditGroup();
+        for (const LspTextEdit& e : target.edits) view->replaceRange(e.range, e.newText);
+        view->endEditGroup();
+        changed++;
+    }
+
+    if (originalIndex >= 0 && originalIndex < static_cast<int>(buffers_.size())) {
+        activateBuffer(originalIndex);
+    }
+    return changed;
+}
+
 bool MainWindow::isStdlibPath(const QString& path) {
     // Delegated rather than re-derived: two independent derivations of the
     // stdlib directory drift the moment TROWEL_TURMERIC_VERSION moves.
@@ -1409,17 +1754,46 @@ void MainWindow::jumpToDefinition(const LspLocation& location) {
     v->setCursorPos(v->posFromLineCol(location.line, location.character));
     v->sciWidget()->scrollCaret();
 
-    if (!origin.path.isEmpty()) {
-        navBack_.append(origin);
-        while (navBack_.size() > kNavHistoryMax) navBack_.removeFirst();
-        // A fresh jump invalidates whatever Forward was pointing at.
-        navForward_.clear();
-        updateNavActionsEnabled();
-    }
+    pushNavHistory(origin);
     statusBar()->clearMessage();
     // Tab set and caret are both final by here, so an awaiting caller sees a
     // settled window rather than one mid-jump.
     emit definitionJumpFinished(true);
+}
+
+void MainWindow::pushNavHistory(const NavEntry& origin) {
+    if (origin.path.isEmpty()) return;
+    navBack_.append(origin);
+    while (navBack_.size() > kNavHistoryMax) navBack_.removeFirst();
+    // A fresh jump invalidates whatever Forward was pointing at.
+    navForward_.clear();
+    updateNavActionsEnabled();
+}
+
+void MainWindow::jumpToSpan(const LspSpan& span) {
+    const QString target = LspManager::PathForUri(span.uri);
+    if (target.isEmpty() || !QFileInfo::exists(target)) {
+        statusBar()->show();
+        statusBar()->showMessage(QString("Cannot open %1").arg(span.uri), 5000);
+        return;
+    }
+    const NavEntry origin = currentNavEntry();
+    const QString abs = QFileInfo(target).absoluteFilePath();
+    if (const int existing = indexOfPath(abs); existing >= 0) {
+        activateBuffer(existing);
+    } else if (!openPath(abs)) {
+        return;
+    }
+    EditorView* v = editorView();
+    if (!v) return;
+    // Select the whole span rather than just placing the caret: for a reference
+    // the extent is the point, and it survives the occurrence highlight that
+    // paints over the same range.
+    const int start = v->posFromLineCol(span.range.startLine, span.range.startCharacter);
+    const int end = v->posFromLineCol(span.range.endLine, span.range.endCharacter);
+    v->setSelection(start, end);
+    v->sciWidget()->scrollCaret();
+    pushNavHistory(origin);
 }
 
 void MainWindow::navigateBack() {
@@ -1547,6 +1921,8 @@ void MainWindow::openPreferences() {
     auto* prefs = new PreferencesView(editorStack_);
     connect(prefs, &PreferencesView::rainbowBracketsChanged,
             this, &MainWindow::applyRainbowBrackets);
+    connect(prefs, &PreferencesView::bracketPairGuidesChanged,
+            this, &MainWindow::applyBracketPairGuides);
 
     // Reuse a fresh, empty, unmodified Untitled editor if available.
     if (activeIndex_ >= 0 && activeIndex_ < static_cast<int>(buffers_.size())) {
@@ -1583,7 +1959,19 @@ void MainWindow::openPreferences() {
 void MainWindow::applyRainbowBrackets(bool enabled) {
     for (auto& b : buffers_) {
         if (b->view && b->view->kind() == TabContent::Kind::Editor) {
-            static_cast<EditorView*>(b->view)->setRainbowBrackets(enabled);
+            auto* editor = static_cast<EditorView*>(b->view);
+            editor->setRainbowBrackets(enabled);
+            // The guide takes its colour from the pair's depth style, which
+            // just changed out from under it in both directions.
+            editor->updateBracketGuide();
+        }
+    }
+}
+
+void MainWindow::applyBracketPairGuides(bool enabled) {
+    for (auto& b : buffers_) {
+        if (b->view && b->view->kind() == TabContent::Kind::Editor) {
+            static_cast<EditorView*>(b->view)->setBracketPairGuides(enabled);
         }
     }
 }

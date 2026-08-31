@@ -1,6 +1,13 @@
 # Editor intelligence: rename, the tracer, and bracket-pair guides — plan
 
-> **Status:** Proposed. T0 (the version bump) is **done and verified** (§2).
+> **Status:** **Track R and track G shipped; track T shipped through T1.**
+> T0 done and verified (§2), plus a follow-on bump to **`v0.42.1`** (§2.1) for
+> the per-expression tracer. R1 had already landed under
+> `lsp-navigation.md` T3; R2/R3/R4 and G1/G2/G3 are built and tested. T1 is
+> built. Its first conclusion — that typed code cannot be traced — was **wrong
+> and is retracted in §5.3.1**; the cause was source layout under line-granular
+> stepping, fixed upstream by Turmeric `e7140c97c`. T3–T6 are not blocked, and
+> need only a pin bump past that commit (§5.5). Deviations are in §9.
 > **Related:** [`lsp-support.md`](lsp-support.md) (phase 1 landed; this is a
 > second follow-up alongside `lsp-navigation.md`),
 > [`lsp-navigation.md`](lsp-navigation.md) (owns definition / outline /
@@ -124,6 +131,21 @@ in sibling plans:
 Both corrections are made in place in those documents by this change; they are
 noted here because the bump is what caused them.
 
+### 2.1 The follow-on bump — `v0.42.0` → `v0.42.1` (done)
+
+Cut upstream to carry `e7140c97c`, the per-expression tracer (§5.3.1).
+`CMakeLists.txt:123` plus the three per-arch SHA-256s at `:132`, `:137`,
+`:140`, taken verbatim from the release's `sha256sums.txt` and cross-checked
+against the digests the GitHub release API reports for the same assets; and
+`mise.toml` to match.
+
+Verified: `just build` clean, `FetchContent` accepted the macOS hash, the
+staged binary reports `v0.42.1`, its `stdlib/` came with it (145 entries), and
+the full smoke suite passes **198/198 with no test touched outside
+`test_trace.py`** — which is what §13 of `lsp-navigation.md` asks a bump to
+demonstrate, since a compiler release reaches the REPL, the run path and the
+formatter as well as the tracer.
+
 ---
 
 ## 3. Track R — rename, references, occurrence highlight
@@ -157,6 +179,70 @@ references" before building any of this. The three facts that shape the client:
 3. **`references` is the same workspace walk without the edit.** An oversized
    workspace returns a *shorter list* rather than an error — an incomplete list
    of references is still true about every entry in it.
+
+### 3.1.1 Measured against the staged `v0.42.0` binary
+
+Probed over stdio the way `LspManager` spawns it, on a fixture holding a global
+`total`, a `let` binding that shadows it, a parameter that shadows it, and the
+name inside both a comment and a string. Four of these change the client.
+
+| Question | Answer |
+|---|---|
+| `prepareRename` success shape | `{"range": …, "placeholder": "total"}` — the placeholder is the current name, so the input pre-fills from the reply rather than from a re-read of the buffer |
+| `rename` reply shape | **`{"changes": {uri: [TextEdit]}}`** — the map form. `documentChanges` never appears; parse both anyway, per house style |
+| Scope, downward | Renaming the global edits the def and its one real use. The shadowing `let`, the shadowing parameter, the comment and the string are **all untouched** |
+| Scope, upward | Renaming the `let` binding edits its two occurrences only; the global is untouched |
+| Cross-file | Renaming an exported name returns a **two-document** `changes` map — the defining file (export list *and* def) plus the importing file's `:refer` — and the importing file has no tab |
+
+**The one that reshapes §3.4: a refusal is a JSON-RPC error, not a null result.**
+
+```
+prepareRename on a stdlib symbol
+  → error {"code": -32600, "message": "cannot rename stdlib symbol"}
+prepareRename inside a comment
+  → error {"code": -32600, "message": "cannot rename: no definition found for this name"}
+prepareRename on a blank line
+  → result null
+```
+
+§3.4 describes three outcomes and gets them right, but the *mechanism* matters
+for the client: seven of the eight documented refusals arrive through
+`LspError`, which `LspClient` already carries with its message intact. Only the
+genuinely-nothing-there case answers `null`. So the callback needs all three
+arms — range, null, and error-with-message — and the error arm is the common
+one.
+
+**And one upstream inconsistency, benign but worth pinning.**
+**`prepareRename` does not consult lexical context.** It resolves the *word* at
+the position against the symbol table, so with the caret on `total` inside
+either a comment or a string literal:
+
+- `prepareRename` returns a range **inside the comment or string** and reports
+  it as renameable, with placeholder `total`;
+- `references`, `documentHighlight` and `rename` all correctly resolve to the
+  **global**, and the rename leaves both decoys byte-identical.
+
+So the edit is right and only the *preview range* is wrong. Worth being precise
+about the boundary: only a position whose word matches a known symbol behaves
+this way. A caret on genuinely empty space answers `null`, and a caret on a
+comment word that matches nothing errors with "no definition found" — which is
+why an early probe on the middle of a comment looked like a clean refusal and
+the quirk was nearly missed.
+
+The consequence is cosmetic — an input box appearing over text that will not
+change — and the mitigation is free: T3's occurrence highlight is already
+painting the real occurrences when the input opens, so the user can see what
+will actually change. Not worked around client-side; three smoke tests pin it
+(the quirk itself, plus the comment and string renames landing on the global),
+so a change upstream is noticed rather than silently altering behaviour.
+
+**Not covered: the macro-introduced-binder refusal.** The guide documents
+`cannot rename a macro-introduced binding`, but a `defmacro` whose expansion
+introduces a `let` binder produced the generic "no definition found for this
+name" instead, so there is no fixture that reaches that message on `v0.42.0`.
+The refusal *path* is covered by the stdlib case, which returns its documented
+message verbatim; the macro-specific wording is not, and is recorded here
+rather than approximated by a test that asserts something else.
 
 ### 3.2 R1 — occurrence highlight — **built, under `lsp-navigation.md` T3**
 
@@ -336,18 +422,41 @@ to shortcut it — style cycles mod 7, so depth must be *counted*, not read.
   style color. No per-depth indicator slots are needed.
 - **Clear before painting**, the way `clearDiagnosticDecorations()` already
   does. The guide is transient by definition.
-- **Match Monaco's suppression rules** rather than inventing new ones. Check
-  against the real thing in Try Turmeric: whether a pair entirely on one line
-  gets a segment, and what happens at the top level with no enclosing pair. Write
-  the answers down here.
+- **Match Monaco's suppression rules** rather than inventing new ones. Read out
+  of `web/node_modules/monaco-editor/esm/vs/editor/common/model/guidesTextModelPart.js`
+  (`getLinesBracketGuides`) rather than inferred from behaviour:
+
+  | Question | Monaco's answer | In Trowel |
+  |---|---|---|
+  | Does a pair entirely on one line get a segment? | **Yes.** `includeSingleLinePairs` is a hardcoded `true`, and the segment runs from the opener's **end** column to the closer's column — between the brackets, not under them | matched |
+  | What happens at the top level? | `activeBracketPairRange` is `undefined`, and with `bracketPairsHorizontal: 'active'` no horizontal guide is emitted at all | matched — nothing is painted |
+  | Which pair is active when several contain the caret? | `findLast` over the containing pairs — the **innermost** | matched, by scanning outward from the caret and stopping at the first unmatched opener |
+  | Where does a multi-line pair's segment sit? | On the closing line, from `min(openerColumn, closerColumn)` to the closer | matched |
+  | Is a caret *on* a bracket inside it? | No — `Range.strictContainsPosition` | **not matched**; the backward scan treats a caret immediately after an opener as inside. The difference shows only when the caret sits exactly on a bracket, where Trowel draws the pair Monaco would skip. Drawing something for a caret on a bracket is the more useful answer, and it is the one Scintilla users expect from `SCI_BRACEHIGHLIGHT` |
+
+  The vertical guide (§4.4) took one correction from the same source. Monaco
+  emits a guide **on** each line from the opener's through the one before the
+  closer, not in the gap between them. A gap-based spine has zero height
+  whenever the closer sits on the very next line — which is the overwhelmingly
+  common lisp shape — so it would vanish exactly where it is most wanted.
 - **Preference + theme.** `editor/bracketPairGuides`, default on, next to the
   existing `editor/rainbowBrackets` checkbox in `PreferencesView` — and it should
   follow rainbow brackets: with rainbow *off*, brackets fall back to the flat
   `Delim` / `CurlyInfix` styles and there is no depth color, so either fall back
-  to one neutral color or hide the guide. Pick one and say which. Optionally add
-  a `bracketPairGuide` key to the theme's `styles` block for the case where the
-  guide should be *dimmer* than the parens — this is the same escape hatch the
-  Monaco note names.
+  to one neutral color or hide the guide. Pick one and say which.
+
+  **Picked: fall back to a neutral colour** — `STYLE_INDENTGUIDE`, read back off
+  Scintilla like the depth colours are. Hiding the guide would tie two unrelated
+  preferences together: rainbow brackets is about *colour*, and the guide is
+  about *extent* — how far the expression you are inside reaches. That question
+  is worth answering in one colour, and someone who turns rainbow off has said
+  nothing about wanting to lose it.
+
+  No `bracketPairGuide` theme key was added. The colour is read from the pair's
+  own style with `SCI_STYLEGETFORE`, so there is exactly one place a depth
+  colour is defined and the guide cannot drift from the parens it belongs to.
+  A separate key would be a second source of truth for the dimmer-guide case,
+  which nobody has asked for yet.
 
 ### 4.4 G2 — the vertical guide
 
@@ -441,6 +550,99 @@ out loud rather than discover:
    recording. Trowel must surface the compile error — which the LSP has usually
    already published as a diagnostic — and must not open a timeline.
 
+### 5.3.1 Measured for T1 — including one wrong conclusion, corrected
+
+> **Correction.** This section first reported that *type annotations* suppress
+> recording, on the theory that an annotated `defn` compiles and compiled
+> frames record nothing. **That was wrong**, and §5.3.1's original table and
+> §5.5's "stop" recommendation were both built on it. The real cause is source
+> layout, established below. The error is left visible rather than quietly
+> rewritten because the false version shipped in code comments and a test, and
+> anyone who read those needs to be able to find the retraction.
+
+Run against the staged `v0.42.0` binary.
+
+| Fixture | exit | steps | peak depth |
+|---|---|---|---|
+| 50k `while` loop in `main` | 0 | 100,004 (1.44 MB) | 1 |
+| `fib 12`, annotated, one form per line | **144** | **2** | 1 |
+| `fib 12`, **unannotated**, one form per line | 144 | **2** | 1 |
+| `fib 12`, annotated, **spread across lines** | 144 | **1395** | **12** |
+| top-level work, no `main` | 0 | 0 | 0 |
+| a file that does not compile | 1 | 0 | 0 |
+
+**Annotations make no difference** — annotated and unannotated `fib` record
+identically. **Source layout makes all of it.** The same program, same types,
+differing only in where the newlines fall, records 2 steps at depth 1 or 1395
+at depth 12.
+
+The cause is in `eval.c`: the recorder drives the debugger with
+`turi_debug_resume_step_in`, whose stop predicate is line-granular — it stops
+at "the next node on a *different source line*". A form written on one line
+pauses once; every node inside it shares that line, so the interpreter never
+stops again and the whole call runs unrecorded. Depth never rises because
+`turi_dbg_push` happens during that unrecorded stretch. Dumping a recording
+shows it directly: a recursive `addup 50` yields `sites=2` with one STEP inside
+`addup` carrying `n=50`, and then nothing.
+
+**This is fixed upstream, and Trowel is now pinned to the fix.** Turmeric
+`e7140c97c` ("tracer: record one step per expression, not per source line")
+adds `DBG_STEP_NODE` / `turi_debug_resume_step_node` and drives the recorder
+with it; it ships in **`v0.42.1`**, which §2.1 bumped to. Its own commit
+message reports the same finding independently: *"the same loop recorded 3
+steps on one line and 23 broken across four. Per expression, both record 58."*
+Interactive `tur debug` stepping stays line-granular, which is what a human
+drives and what DAP speaks.
+
+Measured on `v0.42.1`, the two spellings now agree exactly:
+
+| Fixture | v0.42.0 (per line) | v0.42.1 (per expression) |
+|---|---|---|
+| `trace_dense.tur` | 2 steps, depth 1 | **1591 steps, 177 enters, depth 10** |
+| `trace_spread.tur` | 531 steps, depth 10 | **1591 steps, 177 enters, depth 10** |
+| `trace_loop.tur` | 404 steps | 1408 steps (~3.5x, the multiplier the commit predicts) |
+
+Identical step, enter, pop and change counts for the dense and spread
+spellings — they differ by one byte, which is the filename in the site table.
+Layout no longer affects fidelity at all.
+
+Three consequences Trowel had to carry, and one it already did:
+
+- **The summary line format changed** — `trace: N steps (per expression), …`.
+  Trowel's parser would have returned `parsed=false` and reported "could not
+  run `tur trace`" on the first pin bump past `v0.42.0`. `ParseSummary` now
+  accepts both spellings and records the granularity, because *what a low step
+  count means* depends on it.
+- **The default step cap moved**, 200k → **1M** native (250k browser), since a
+  cap bounds the recording and holding the number would have cut every
+  recording's reach by the granularity multiplier. At ~17.5 bytes/step that is
+  ~17 MB in Trowel's address space at the cap — unremarkable for a native app,
+  worth knowing before a timeline holds one.
+- **Format v2**: a site now carries `col_end` and the header a granularity
+  flag. v1 recordings still read back with `col_end 0`, so a recording made by
+  the currently pinned binary stays readable.
+- **`tur dap` maps replay steps back onto lines** for
+  `stepIn`/`next`/`stepBack`/`reverseNext`, because an editor draws a line
+  marker and four keypresses that leave it in place read as a hung debugger.
+  That is T3's stepping semantics, decided upstream and for the right reason.
+
+**The fourth constraint the plan missed still stands, and is independent of all
+of the above:**
+
+**The fourth constraint: the exit code is unusable as a success signal.**
+`tur trace` propagates the traced program's own return value. The annotated
+fixture exits **144** — which is `(fib 12)`, not an error. So across the four
+cases the exit code takes the values 0, 144, 0 and 1, and it distinguishes
+nothing: 0 means both "recorded fine" and "no main", while non-zero means both
+"did not compile" and "your program returned that".
+
+Everything is therefore classified from the **text**: the `trace: …` summary
+line is parsed, and an `error` line on the stream is checked *first* — because
+a broken file still emits a summary and would otherwise be reported identically
+to the no-main case. That ordering is the single most load-bearing line in
+`TraceRunner::onFinished`, and `test_a_file_that_does_not_compile_reports_the_error`
+exists to pin it.
+
 ### 5.4 Two ways in, and the recommendation
 
 **Option A — drive `tur trace` as a subprocess and parse `.turtrace` in Trowel.**
@@ -486,6 +688,32 @@ papered over:
 T1 is worth shipping alone: it is an afternoon, it costs nothing to throw away,
 and it is what answers §5.3's three questions with real fixtures before any UI
 depends on the answers.
+
+**T1 has shipped. Where that leaves T3–T6:**
+
+> **Retracted.** This section previously recommended *not* starting T3–T6, on
+> the grounds that the tracer records almost nothing for typed code and §8's
+> stop-condition had been met. That rested on the misattribution corrected in
+> §5.3.1. There was no upstream gap to file, and §8's stop-condition was never
+> actually met.
+
+§8's risk reads "if the answer is 'four steps for anything anyone writes', the
+honest outcome is to ship T1 and stop." The answer is **not** that. Ordinarily
+formatted code records richly — `fib 12` spread across lines gives 1395 steps
+at depth 12 on the pinned binary, and Turmeric `e7140c97c` removes the layout
+sensitivity entirely. Try Turmeric's own measured figure, "65 steps both ways,
+peak depth 7", is the same recorder on ordinary source.
+
+**So T3–T6 are not blocked**, and the sequencing the plan already set stands
+unchanged: T2 first (`debugger-support.md` phases 1–3), because replay is that
+same client with three extra requests and a different `launch` argument.
+
+**The one prerequisite is now met.** `v0.42.1` carries `e7140c97c` and Trowel
+is pinned to it (§2.1), so recordings are per expression and no longer depend
+on how the user punctuates their source. T3–T6 are gated on **T2 alone** —
+`debugger-support.md` phases 1–3 — exactly as this plan originally sequenced
+them, and for the original reason: replay is that same client with three extra
+requests and a different `launch` argument.
 
 ### 5.6 T6 — the depth ribbon
 
@@ -566,11 +794,18 @@ Both plans now have a claim on occurrence highlight. Resolve it once:
 
 ## 8. Risks
 
-- **The tracer records almost nothing for typed code** (§5.3.1). This is not a
-  bug to fix in Trowel and it is not something a better UI hides. T1 exists to
-  measure how bad it is against realistic files *before* T3–T6 are built on top;
-  if the answer is "four steps for anything anyone writes", the honest outcome is
-  to ship T1 and stop, and file the gap upstream.
+- ~~**The tracer records almost nothing for typed code.**~~ **Retired — the
+  premise was false** (§5.3.1). Annotations are irrelevant; the effect was
+  line-granular stepping collapsing densely written source, and Turmeric
+  `e7140c97c` records per expression. What T1 actually demonstrated is the
+  value of the phase itself: it was built to test this risk against real
+  fixtures before T3–T6 depended on the answer, and it caught a wrong answer
+  that had already reached code comments and a test.
+- **Version skew in the trace summary line.** The format gained a granularity
+  field, and a parser that knew only one spelling would report a perfectly good
+  binary as "could not run `tur trace`". `ParseSummary` accepts both. Any
+  future field is the same hazard — parse leniently, and never key a UI state
+  off a failed parse alone.
 - **A cross-file rename is the most destructive operation in the editor.** The
   mitigations are in §3.4 — all-or-nothing application, leave buffers dirty,
   confirm above a threshold — and the shadowing smoke tests in §3.5 are what keep
@@ -582,3 +817,103 @@ Both plans now have a claim on occurrence highlight. Resolve it once:
   flight, diagnostics, completion and hover all queue behind it. Show that the
   editor is busy rather than appearing hung.
 - **T6 may need an upstream change** (§5.6). Decide before T4, not during it.
+
+---
+
+## 9. As built — deviations and decisions
+
+Recorded rather than silently absorbed, matching `lsp-navigation.md` §14.
+
+### Track R
+
+1. **The references list reuses the outline's `SCI_USERLISTSHOW` widget**, which
+   §6 explicitly said was *not* settled by the outline having landed first — a
+   references panel spans files and "probably wants the palette §6.2 defers".
+   It still might. But §6.2's "do not build it speculatively" is the stronger
+   instruction, and a user list with `file:line  text` rows works: it filters by
+   prefix, it is already themed, and it costs nothing. If it proves too small on
+   a real workspace, that is the evidence §6.2 was asking for before building a
+   palette. Rows deliberately read **References**, never *All references* — an
+   oversized workspace silently returns a short list.
+
+2. **Rename's confirmation prompt lives in the UI slot, not in
+   `applyWorkspaceEdit`.** The threshold check (§3.4, 20 documents) is policy;
+   applying is mechanism. Splitting them is what lets the control API drive a
+   cross-file rename in a smoke test without a modal dialog blocking the
+   socket's event loop.
+
+3. **The rename input is the inline widget, not the dialog fallback.** §3.4
+   permits shipping the dialog first. It was not, because a modal dialog would
+   *hang* every test that reached it rather than failing it — and rename is the
+   one operation in this editor least able to afford untested paths. The
+   inline `QLineEdit` dismisses on Escape and on focus loss.
+
+4. **`applyWorkspaceEdit` also refuses to edit the bundled stdlib.** Not in
+   §3.4, but it follows from the same all-or-nothing rule: those files are
+   read-only (`lsp-navigation.md` §5.3), so a rename reaching one could only
+   ever half-apply. The server refuses stdlib renames anyway; this is the
+   client-side backstop.
+
+5. **`editor.begin_rename` was added to the control API**, beyond §3.5's four
+   handlers. Same reason `nav.goto_definition` exists: prepareRename is
+   asynchronous and its refusal arm can resolve within one event-loop turn, so
+   a test that triggers then waits has no race-free moment to observe. It
+   connects before triggering.
+
+6. **The macro-introduced-binder refusal is not covered by a test.** See the
+   end of §3.1.1 — no fixture reaches that message on `v0.42.0`.
+
+### Track G
+
+7. **`Range.strictContainsPosition` is not matched.** Monaco does not consider a
+   caret sitting exactly on a bracket to be inside that pair; Trowel does. The
+   full rule table is in §4.3. Drawing something for a caret on a bracket is
+   what a Scintilla user expects from `SCI_BRACEHIGHLIGHT`.
+
+8. **The rainbow-off fallback is a neutral colour, not a hidden guide**, and no
+   `bracketPairGuide` theme key was added. Both decisions and their reasons are
+   written into §4.3 where the plan asked for them.
+
+9. **G2 landed as its own overlay widget** because minimap phase 4 has not
+   shipped. §4.4 says to reuse the minimap's overlay if it lands first; it did
+   not, so this is the first one. If the minimap arrives, fold
+   `BracketGuideOverlay` into its pass rather than stacking a second
+   transparent widget over the same viewport — the note is on the forward
+   declaration in `editor_view.h` so whoever builds the minimap trips over it.
+
+### Track T
+
+10. **Track T stops after T1 — because T2 is a different plan's work**, not
+    because anything is blocked. The earlier "stopped on purpose, the tracer
+    cannot see typed code" rationale was wrong and is retracted in §5.3.1 and
+    §5.5.
+
+11. **`trace_typed.tur` was renamed `trace_dense.tur`.** Its old name asserted
+    the wrong cause. It is now the dense half of a pair with
+    `trace_spread.tur`: same program, same annotations, different line
+    layout — 2 steps versus 531 under `v0.42.0`, and identical under
+    `v0.42.1`. `trace_trivial.tur` was added to keep a genuine
+    short-recording case, since dense source is no longer one.
+
+12. **`ParseSummary` accepts both summary formats.** The granularity field is
+    optional in the regex and captured when present. This was not
+    forward-thinking so much as necessary: without it the `v0.42.1` bump would
+    have made every trace report "could not run `tur trace`", because a failed
+    parse was the only signal the outcome classifier had.
+
+11. **`TraceOutcome` is an enumeration, not a step count.** The UI speaks from
+    the outcome because "2 steps" without a reason is precisely what makes a
+    user conclude the tracer is broken (§8). Four outcomes, four distinct
+    sentences, pinned pairwise-distinct by a test.
+
+### Still open, by design
+
+- **T3–T6** (§5.5) — gated on T2 (`debugger-support.md` phases 1–3) alone; the
+  pin prerequisite is met (§2.1).
+- **T6's depth ribbon** (§5.6) — the "decide before T4" call is moot while T4
+  is not being built, but the decision itself is unchanged: a DAP `custom`
+  request upstream, or a ribbon-only `.turtrace` header reader.
+- **A references palette** (§6.2) — build only if the user list proves too blunt.
+- **`--rename-exports` as a preference** (§3.4) — the refusal is surfaced
+  verbatim, so a user hitting it is told what the flag is; wiring it to a
+  checkbox that restarts the server is a small, separate change.

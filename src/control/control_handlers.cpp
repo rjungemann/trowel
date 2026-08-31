@@ -498,6 +498,17 @@ void HandleLspDecorations(MainWindow* w, const QJsonObject&, const Reply& reply)
     o["error_ranges"] = rangesFor(diag::kErrorIndicator);
     o["warning_ranges"] = rangesFor(diag::kWarningIndicator);
     o["occurrence_ranges"] = rangesFor(occurrence::kIndicator);
+    o["bracket_guide_ranges"] = rangesFor(bracketguide::kIndicator);
+    // Asserting on a computed pair without asserting on the painted range
+    // proves nothing, so the colour is read back off the widget too.
+    o["bracket_guide_color"] =
+        static_cast<int>(sci->indicFore(bracketguide::kIndicator));
+    const auto [guideStart, guideEnd] = e->bracketGuideSpan();
+    o["bracket_guide_span"] = QJsonObject{{"start", guideStart}, {"end", guideEnd}};
+    const EditorView::GuideLine line = e->bracketGuideLine();
+    o["bracket_guide_vertical"] = QJsonObject{
+        {"visible", line.visible}, {"x", line.x},
+        {"top", line.top}, {"bottom", line.bottom}};
     o["error_marker_lines"] = errorMarkerLines;
     o["warning_marker_lines"] = warningMarkerLines;
     reply(o, nullptr);
@@ -652,6 +663,196 @@ void HandleLspSymbols(MainWindow* w, const QJsonObject& args, const Reply& reply
             reply(o, nullptr);
         });
     w->showOutline();
+    ArmTimeout(ctx, w, timeout, reply);
+}
+
+void HandleLspReferences(MainWindow* w, const QJsonObject& args, const Reply& reply) {
+    const int timeout = args.value("timeout_ms").toInt(5000);
+    EditorView* e = RequireEditor(w, reply);
+    if (!e) return;
+    if (args.contains("pos")) e->setCursorPos(args.value("pos").toInt());
+
+    auto ctx = std::make_shared<WaitCtx>();
+    ctx->conn = QObject::connect(w, &MainWindow::referencesReady, w,
+        [ctx, reply](const QVector<LspSpan>& spans, const QString& reason) {
+            if (ctx->done) return;
+            ctx->done = true;
+            if (ctx->timer) ctx->timer->stop();
+            QObject::disconnect(ctx->conn);
+            QJsonArray arr;
+            for (const LspSpan& s : spans) {
+                arr.append(QJsonObject{
+                    {"uri", s.uri},
+                    {"path", LspManager::PathForUri(s.uri)},
+                    {"line", s.range.startLine},
+                    {"character", s.range.startCharacter},
+                    {"end_line", s.range.endLine},
+                    {"end_character", s.range.endCharacter},
+                });
+            }
+            QJsonObject o;
+            o["references"] = arr;
+            o["count"] = arr.size();
+            o["reason"] = reason;
+            reply(o, nullptr);
+        });
+    w->findReferences();
+    ArmTimeout(ctx, w, timeout, reply);
+}
+
+void HandleLspPrepareRename(MainWindow* w, const QJsonObject& args, const Reply& reply) {
+    EditorView* e = RequireEditor(w, reply);
+    if (!e) return;
+    const int timeout = args.value("timeout_ms").toInt(12000);
+    const int pos = args.contains("pos") ? args.value("pos").toInt() : e->cursorPos();
+
+    // Goes straight to the manager rather than through renameSymbol(), so a
+    // test can read the three outcomes without the inline input opening.
+    auto ctx = std::make_shared<WaitCtx>();
+    LspManager::instance()->requestPrepareRename(
+        e, pos, [ctx, reply](const LspManager::PrepareRename& prep) {
+            if (ctx->done) return;
+            ctx->done = true;
+            if (ctx->timer) ctx->timer->stop();
+            QJsonObject o;
+            o["renameable"] = prep.renameable;
+            o["placeholder"] = prep.placeholder;
+            // Empty unless the server refused; carries its words verbatim.
+            o["refusal"] = prep.refusal;
+            o["line"] = prep.range.startLine;
+            o["character"] = prep.range.startCharacter;
+            reply(o, nullptr);
+        });
+    ArmTimeout(ctx, w, timeout, reply);
+}
+
+void HandleLspRename(MainWindow* w, const QJsonObject& args, const Reply& reply) {
+    EditorView* e = RequireEditor(w, reply);
+    if (!e) return;
+    const QString newName = args.value("new_name").toString();
+    if (newName.isEmpty()) { ReplyErr(reply, "bad_args", "missing `new_name`"); return; }
+    const int timeout = args.value("timeout_ms").toInt(12000);
+    const int pos = args.contains("pos") ? args.value("pos").toInt() : e->cursorPos();
+    // Default false so a test has to opt in to touching buffers; the common
+    // case is asserting on the edit the server proposed.
+    const bool apply = args.value("apply").toBool(false);
+
+    auto ctx = std::make_shared<WaitCtx>();
+    LspManager::instance()->requestRename(
+        e, pos, newName,
+        [ctx, reply, w, apply](const LspWorkspaceEdit& edit, const QString& error) {
+            if (ctx->done) return;
+            ctx->done = true;
+            if (ctx->timer) ctx->timer->stop();
+
+            QJsonObject documents;
+            for (auto it = edit.constBegin(); it != edit.constEnd(); ++it) {
+                QJsonArray edits;
+                for (const LspTextEdit& te : it.value()) {
+                    edits.append(QJsonObject{
+                        {"line", te.range.startLine},
+                        {"character", te.range.startCharacter},
+                        {"end_line", te.range.endLine},
+                        {"end_character", te.range.endCharacter},
+                        {"new_text", te.newText},
+                    });
+                }
+                documents.insert(LspManager::PathForUri(it.key()), edits);
+            }
+
+            QJsonObject o;
+            o["documents"] = documents;
+            o["document_count"] = documents.size();
+            o["error"] = error;
+            if (apply && error.isEmpty() && !edit.isEmpty()) {
+                QString applyError;
+                const int changed = w->applyWorkspaceEdit(edit, &applyError);
+                o["applied"] = changed;
+                o["apply_error"] = applyError;
+            } else {
+                o["applied"] = 0;
+                o["apply_error"] = QString();
+            }
+            reply(o, nullptr);
+        });
+    ArmTimeout(ctx, w, timeout, reply);
+}
+
+void HandleEditorBeginRename(MainWindow* w, const QJsonObject& args, const Reply& reply) {
+    const int timeout = args.value("timeout_ms").toInt(12000);
+    EditorView* e = RequireEditor(w, reply);
+    if (!e) return;
+    if (args.contains("pos")) e->setCursorPos(args.value("pos").toInt());
+
+    // Drives the real F2 path — prepareRename included — and settles on
+    // whichever arm it takes. Connected before triggering, because the refusal
+    // arm can resolve inside the same event-loop turn.
+    auto ctx = std::make_shared<WaitCtx>();
+    auto opened = std::make_shared<QMetaObject::Connection>();
+    auto finish = [ctx, opened, reply](bool wasOpened, const QString& refusal) {
+        if (ctx->done) return;
+        ctx->done = true;
+        if (ctx->timer) ctx->timer->stop();
+        QObject::disconnect(ctx->conn);
+        QObject::disconnect(*opened);
+        QJsonObject o;
+        o["opened"] = wasOpened;
+        o["refusal"] = refusal;
+        reply(o, nullptr);
+    };
+    *opened = QObject::connect(w, &MainWindow::renameInputOpened, w,
+                               [finish] { finish(true, QString()); });
+    ctx->conn = QObject::connect(w, &MainWindow::renameFinished, w,
+        [finish](int, const QString& message) { finish(false, message); });
+    w->renameSymbol();
+    ArmTimeout(ctx, w, timeout, reply);
+}
+
+void HandleEditorRenameInput(MainWindow* w, const QJsonObject&, const Reply& reply) {
+    EditorView* e = RequireEditor(w, reply);
+    if (!e) return;
+    QJsonObject o;
+    o["visible"] = e->renameInputVisible();
+    o["text"] = e->renameInputText();
+    reply(o, nullptr);
+}
+
+void HandleTraceRun(MainWindow* w, const QJsonObject& args, const Reply& reply) {
+    // Recording is a real subprocess running a real program, so this gets a
+    // longer default than the LSP requests do.
+    const int timeout = args.value("timeout_ms").toInt(20000);
+    EditorView* e = RequireEditor(w, reply);
+    if (!e) return;
+
+    static const QHash<TraceOutcome, QString> kNames = {
+        {TraceOutcome::Failed, QStringLiteral("failed")},
+        {TraceOutcome::CompileError, QStringLiteral("compile_error")},
+        {TraceOutcome::NoMain, QStringLiteral("no_main")},
+        {TraceOutcome::ShortRecording, QStringLiteral("short_recording")},
+        {TraceOutcome::Recorded, QStringLiteral("recorded")},
+    };
+
+    auto ctx = std::make_shared<WaitCtx>();
+    ctx->conn = QObject::connect(w, &MainWindow::traceFinished, w,
+        [ctx, reply](TraceOutcome outcome, const TraceSummary& summary,
+                     const QString& explanation) {
+            if (ctx->done) return;
+            ctx->done = true;
+            if (ctx->timer) ctx->timer->stop();
+            QObject::disconnect(ctx->conn);
+            QJsonObject o;
+            o["outcome"] = kNames.value(outcome, QStringLiteral("unknown"));
+            o["explanation"] = explanation;
+            o["parsed"] = summary.parsed;
+            o["steps"] = summary.steps;
+            o["enters"] = summary.enters;
+            o["peak_depth"] = summary.peakDepth;
+            o["output_bytes"] = summary.outputBytes;
+            o["truncated"] = summary.truncated;
+            o["granularity"] = summary.granularity;
+            reply(o, nullptr);
+        });
+    w->traceBuffer();
     ArmTimeout(ctx, w, timeout, reply);
 }
 
@@ -1028,6 +1229,8 @@ void Dispatch(WindowManager* windows, QPointer<ControlConnection> conn,
     if (cmd == "editor.set_selection") { HandleEditorSetSelection(w, args, reply); return; }
     if (cmd == "editor.get_style_at")  { HandleEditorGetStyleAt(w, args, reply); return; }
     if (cmd == "editor.is_read_only")  { HandleEditorIsReadOnly(w, args, reply); return; }
+    if (cmd == "editor.rename_input")  { HandleEditorRenameInput(w, args, reply); return; }
+    if (cmd == "editor.begin_rename")  { HandleEditorBeginRename(w, args, reply); return; }
 
     if (cmd == "lsp.status")           { HandleLspStatus(w, args, reply); return; }
     if (cmd == "lsp.diagnostics")      { HandleLspDiagnostics(w, args, reply); return; }
@@ -1037,7 +1240,12 @@ void Dispatch(WindowManager* windows, QPointer<ControlConnection> conn,
     if (cmd == "lsp.definition")       { HandleLspDefinition(w, args, reply); return; }
     if (cmd == "lsp.symbols")          { HandleLspSymbols(w, args, reply); return; }
     if (cmd == "lsp.highlights")       { HandleLspHighlights(w, args, reply); return; }
+    if (cmd == "lsp.references")       { HandleLspReferences(w, args, reply); return; }
+    if (cmd == "lsp.prepare_rename")   { HandleLspPrepareRename(w, args, reply); return; }
+    if (cmd == "lsp.rename")           { HandleLspRename(w, args, reply); return; }
     if (cmd == "lsp.restart")          { HandleLspRestart(w, args, reply); return; }
+
+    if (cmd == "trace.run")            { HandleTraceRun(w, args, reply); return; }
 
     if (cmd == "nav.history")          { HandleNavHistory(w, args, reply); return; }
     if (cmd == "nav.goto_definition")  { HandleNavGotoDefinition(w, args, reply); return; }

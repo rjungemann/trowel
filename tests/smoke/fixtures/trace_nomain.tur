@@ -1,0 +1,3 @@
+;; Records 0 steps: `tur trace` records what `(main)` evaluates, and this
+;; file`s work happens at the top level.
+(println "no main here")

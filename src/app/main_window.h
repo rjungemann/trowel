@@ -2,6 +2,7 @@
 
 #include "lsp/lsp_location.h"
 #include "lsp/lsp_symbol.h"
+#include "trace/trace_runner.h"
 #include "repl/run_buffer.h"
 
 #include <QFont>
@@ -27,6 +28,7 @@ namespace trowel {
 class DirectoryView;
 class EditorView;
 class ProjectRunner;
+class TraceRunner;
 class ReplSession;
 class TabBar;
 class TabContent;
@@ -87,9 +89,24 @@ public slots:
     // menu: it has to connect to definitionJumpFinished before the request goes
     // out, which menu.invoke gives it no chance to do.
     void goToDefinition();
+    // Record an execution trace of the active buffer with `tur trace`.
+    void traceBuffer();
     // Show the document outline. Public for the same reason as goToDefinition:
     // the control API awaits outlineReady before the request goes out.
     void showOutline();
+    // List every use of the symbol at the caret, across the workspace.
+    void findReferences();
+    // Ask whether the symbol at the caret can be renamed, and if so open the
+    // inline input. The rename itself happens when that input is committed.
+    void renameSymbol();
+
+    // Apply a WorkspaceEdit to open buffers, opening tabs for documents that
+    // have none. Returns the number of documents changed, or -1 on failure with
+    // `error` set — in which case *nothing* was applied.
+    //
+    // Public so the control API can drive the mechanism without going through
+    // the confirmation prompt, which is UI policy rather than part of applying.
+    int applyWorkspaceEdit(const LspWorkspaceEdit& edit, QString* error);
 
 signals:
     // A go-to-definition round trip finished. `jumped` is false when the server
@@ -104,6 +121,20 @@ signals:
     // document order; `reason` is empty on success and otherwise names the
     // state that was shown instead of a list.
     void outlineReady(const QVector<LspSymbol>& symbols, const QString& reason);
+    // A references lookup finished. `reason` is empty on success.
+    void referencesReady(const QVector<LspSpan>& spans, const QString& reason);
+    // A rename round trip finished. `changedDocuments` is 0 when nothing was
+    // applied; `message` carries the server's refusal verbatim when it refused.
+    void renameFinished(int changedDocuments, const QString& message);
+    // prepareRename came back affirmative and the inline input is now open.
+    // The success counterpart to renameFinished's failure arms, so a caller can
+    // await "the rename UI settled" without polling for a visible widget.
+    void renameInputOpened();
+    // A `tur trace` run finished. Carries the outcome rather than only the
+    // step count, because "2 steps" without the reason is what makes a user
+    // conclude the tracer is broken.
+    void traceFinished(TraceOutcome outcome, const TraceSummary& summary,
+                       const QString& explanation);
 
 protected:
     void closeEvent(QCloseEvent* event) override;
@@ -126,6 +157,7 @@ private slots:
     void toggleReplEditorFocus();
     void runBuffer();
     void runProject();
+
     void runSelection();
     void formatFile();
     void requestCompletion();
@@ -145,6 +177,7 @@ private slots:
     void closeCurrentTab();
     void openPreferences();
     void applyRainbowBrackets(bool enabled);
+    void applyBracketPairGuides(bool enabled);
     void rebuildWindowMenu();
 
 public:
@@ -215,6 +248,15 @@ private:
     // "skip this entry" rather than as an error.
     bool goToNavEntry(const NavEntry& entry);
     void updateNavActionsEnabled();
+    // Push the caret onto the back stack and drop the forward stack. Every
+    // jump this window makes goes through here, so Back is uniform across
+    // go-to-definition, the outline and the references list.
+    void pushNavHistory(const NavEntry& origin);
+    // Open `span`'s file if needed and select its range.
+    void jumpToSpan(const LspSpan& span);
+    // Issue the rename and apply what comes back. Split out of the commit
+    // handler so the confirmation prompt stays in one place.
+    void applyRename(EditorView* view, const QString& newName);
     // What the run/evaluate action means for the active tab. Disabled for a
     // non-Turmeric document, Project for a build.tur manifest.
     EvalMode currentEvalMode() const;
@@ -242,6 +284,7 @@ private:
     QMenu* recentMenu_ = nullptr;
     QMenu* windowMenu_ = nullptr;
     ProjectRunner* projectRunner_ = nullptr;
+    TraceRunner* traceRunner_ = nullptr;
     // Vertical icon bar pinned to the upper-left. The scroll area exists purely
     // so an overflowing button stack can still be wheeled through; its
     // scrollbars are always off, so no chrome is ever painted.
@@ -256,6 +299,12 @@ private:
     QAction* showDocAction_ = nullptr;
     QAction* gotoDefinitionAction_ = nullptr;
     QAction* outlineAction_ = nullptr;
+    QAction* findReferencesAction_ = nullptr;
+    QAction* renameAction_ = nullptr;
+    QAction* traceAction_ = nullptr;
+    // Backing store for the references chooser: the rows shown are strings, so
+    // the spans they stand for have to live somewhere the selection can reach.
+    QVector<LspSpan> referenceSpans_;
     QAction* navBackAction_ = nullptr;
     QAction* navForwardAction_ = nullptr;
     QAction* restartLspAction_ = nullptr;

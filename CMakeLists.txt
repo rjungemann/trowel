@@ -71,6 +71,8 @@ add_library(trowel_lib STATIC
     src/lsp/lsp_transport.h
     src/repl/project_runner.cpp
     src/repl/project_runner.h
+    src/trace/trace_runner.cpp
+    src/trace/trace_runner.h
     src/repl/pty_session.cpp
     src/repl/pty_session.h
     src/repl/terminal_view.cpp
@@ -118,7 +120,7 @@ target_link_libraries(trowel PRIVATE trowel_lib)
 # source of truth: the per-arch SHA-256s below are pinned to this exact tag, so
 # the version must not be independently overridable via -D (which would leave a
 # stale cached value pointing at mismatched hashes).
-set(TROWEL_TURMERIC_VERSION "v0.42.0")
+set(TROWEL_TURMERIC_VERSION "v0.42.1")
 
 # Select the release asset + its SHA-256 for this platform/arch. Hashes are from
 # the release's sha256sums.txt.
@@ -127,15 +129,15 @@ if(APPLE)
     if(CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "arm64" OR
        CMAKE_OSX_ARCHITECTURES MATCHES "arm64")
         set(_turmeric_key "macos-arm64")
-        set(_turmeric_sha "1b3aec4483cfa4622ccf201832deebb135e058663f08cd869b3c5dea25fc02e3")
+        set(_turmeric_sha "b26bee462e9ac1605614d4df6335dccc750bbea13bb9121281d91d1937f1538a")
     endif()
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64)$")
         set(_turmeric_key "linux-x86_64")
-        set(_turmeric_sha "7c3d52204b8d05532b9693f9c2afac69bff52a612979dc34bb20541cbcd2d26f")
+        set(_turmeric_sha "bc92e4988e4690c2be398a9d78861a3ba6556b6bdb52c9381d85206c9ca4a477")
     elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
         set(_turmeric_key "linux-aarch64")
-        set(_turmeric_sha "2535824162cf8b1e0bb84f1c4756a126125e88b8aa7859dff320e5484424ab66")
+        set(_turmeric_sha "92f805fa3072d32aba7121a2ef7f57dfe548634f3f460520dbab74e9b649ac17")
     endif()
 endif()
 

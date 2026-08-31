@@ -1,0 +1,5 @@
+;; Defines the name the sibling module imports. Renaming `shared-value`
+;; here must edit both the export list below and main.tur's :refer.
+(defmodule lib/helper
+  (export shared-value)
+  (def shared-value 42))

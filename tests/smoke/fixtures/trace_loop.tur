@@ -1,0 +1,7 @@
+;; Traces to a real recording: a `while` loop in `main` is interpreted at the
+;; node level, so every iteration is recorded.
+(defn main [] : int
+  (let [^mut i 0]
+    (while (< i 200)
+      (set! i (+ i 1))))
+  0)

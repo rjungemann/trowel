@@ -1,0 +1,23 @@
+;; Fixture for scope-aware highlight, references and rename.
+;;
+;; `total` is bound four different ways on purpose: a global, a `let` binding
+;; that shadows it, a parameter that shadows it, and two decoys (a comment and
+;; a string) that are not bindings at all. Every track-R test asks a question
+;; whose wrong answer is "some other one of these".
+;;
+;; It must analyze cleanly — one rejected form empties the symbol index for the
+;; whole file and every request here would answer null for an unrelated reason.
+(def total 100)
+
+(defn outer [n : int] : int
+  (let [total (* n 2)]
+    (+ total 1)))
+
+(defn uses-global [] : int (+ total 5))
+
+(defn param-fn [total : int] : int (* total 3))
+
+;; total in a comment
+(def note "total in a string")
+
+(defn stdlib-user [] : int (list-head (tcons 1 (tnil))))

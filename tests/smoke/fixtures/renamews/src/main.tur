@@ -1,0 +1,6 @@
+;; Imports the name helper.tur defines, so a rename at the definition has
+;; to reach across into this file.
+(defmodule main
+  (import lib/helper :refer [shared-value])
+  (defn main [] : int
+    (+ shared-value 1)))

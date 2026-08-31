@@ -26,6 +26,11 @@ constexpr int kDidChangeDebounceMs = 250;
 // Analysis can take a while on a large file; completion and hover are
 // interactive and should give up fast rather than pop up over stale text.
 constexpr int kInteractiveTimeoutMs = 1500;
+// Rename and its prepare step compile every importing file for its own binding
+// table before editing it, so they are the two requests in the protocol that
+// legitimately take seconds. Everything else queues behind them on the server's
+// single thread, which is why the UI has to show it is busy (§8 of the plan).
+constexpr int kRenameTimeoutMs = 10000;
 constexpr int kInitializeTimeoutMs = 5000;
 
 constexpr const char* kLanguageId = "turmeric";
@@ -578,6 +583,173 @@ void LspManager::requestDocumentHighlights(EditorView* view, int pos,
         cb(ranges);
     },
     kInteractiveTimeoutMs);
+}
+
+void LspManager::requestReferences(EditorView* view, int pos, bool includeDeclaration,
+                                   ReferencesCallback cb) {
+    DocState* doc = docFor(view);
+    if (!doc || !client_ || state_ != State::Ready) {
+        if (cb) cb({});
+        return;
+    }
+
+    const QString uri = UriFor(view);
+    const int generation = doc->generation;
+
+    if (doc->debounce && doc->debounce->isActive()) {
+        doc->debounce->stop();
+        sendDidChange(uri);
+    }
+
+    client_->request("textDocument/references", QJsonObject{
+        {"textDocument", QJsonObject{{"uri", uri}}},
+        {"position", LspPositionToJson(LspPositionFromPos(view->sciWidget(), pos))},
+        {"context", QJsonObject{{"includeDeclaration", includeDeclaration}}},
+    },
+    [this, cb = std::move(cb), uri, generation](const QJsonValue& result, const LspError* err) {
+        if (!cb) return;
+        const auto it = docs_.constFind(uri);
+        if (it == docs_.constEnd() || it->generation != generation) return;  // stale
+        if (err) { cb({}); return; }
+
+        QVector<LspSpan> spans;
+        for (const QJsonValue& v : result.toArray()) {
+            const QJsonObject o = v.toObject();
+            spans.append(LspSpan{o.value("uri").toString(),
+                                 RangeFromJson(o.value("range").toObject())});
+        }
+        cb(spans);
+    },
+    kInteractiveTimeoutMs);
+}
+
+void LspManager::requestPrepareRename(EditorView* view, int pos, PrepareRenameCallback cb) {
+    DocState* doc = docFor(view);
+    if (!doc || !client_ || state_ != State::Ready) {
+        if (cb) cb(PrepareRename{});
+        return;
+    }
+
+    const QString uri = UriFor(view);
+    const int generation = doc->generation;
+
+    if (doc->debounce && doc->debounce->isActive()) {
+        doc->debounce->stop();
+        sendDidChange(uri);
+    }
+
+    client_->request("textDocument/prepareRename", QJsonObject{
+        {"textDocument", QJsonObject{{"uri", uri}}},
+        {"position", LspPositionToJson(LspPositionFromPos(view->sciWidget(), pos))},
+    },
+    [this, cb = std::move(cb), uri, generation](const QJsonValue& result, const LspError* err) {
+        if (!cb) return;
+        const auto it = docs_.constFind(uri);
+        if (it == docs_.constEnd() || it->generation != generation) return;  // stale
+
+        PrepareRename out;
+        if (err) {
+            // Seven of the server's eight refusals land here, each with a
+            // message written to be read by a person. Carried through verbatim:
+            // paraphrasing "cannot rename a macro-introduced binding" loses the
+            // only thing that tells the user what to do instead.
+            out.refusal = err->message.isEmpty()
+                              ? QStringLiteral("rename was refused")
+                              : err->message;
+            cb(out);
+            return;
+        }
+        // A null result is the eighth case: nothing at this position at all.
+        if (!result.isObject()) { cb(out); return; }
+
+        const QJsonObject o = result.toObject();
+        // The spec also allows {range, placeholder} to be a bare Range, and
+        // allows {defaultBehavior: true}. The pinned server sends the first
+        // form; accept a bare range too rather than breaking on a conforming
+        // change.
+        if (o.contains("range")) {
+            out.range = RangeFromJson(o.value("range").toObject());
+            out.placeholder = o.value("placeholder").toString();
+        } else if (o.contains("start") && o.contains("end")) {
+            out.range = RangeFromJson(o);
+        } else {
+            cb(out);
+            return;
+        }
+        out.renameable = true;
+        cb(out);
+    },
+    kRenameTimeoutMs);
+}
+
+void LspManager::requestRename(EditorView* view, int pos, const QString& newName,
+                               RenameCallback cb) {
+    DocState* doc = docFor(view);
+    if (!doc || !client_ || state_ != State::Ready) {
+        if (cb) cb({}, QStringLiteral("language server is not ready"));
+        return;
+    }
+
+    const QString uri = UriFor(view);
+    const int generation = doc->generation;
+
+    if (doc->debounce && doc->debounce->isActive()) {
+        doc->debounce->stop();
+        sendDidChange(uri);
+    }
+
+    client_->request("textDocument/rename", QJsonObject{
+        {"textDocument", QJsonObject{{"uri", uri}}},
+        {"position", LspPositionToJson(LspPositionFromPos(view->sciWidget(), pos))},
+        {"newName", newName},
+    },
+    [this, cb = std::move(cb), uri, generation](const QJsonValue& result, const LspError* err) {
+        if (!cb) return;
+        const auto it = docs_.constFind(uri);
+        // Staleness matters more here than anywhere else: applying an edit
+        // computed against text the user has since changed corrupts the file.
+        if (it == docs_.constEnd() || it->generation != generation) {
+            cb({}, QStringLiteral("the document changed while renaming; nothing was applied"));
+            return;
+        }
+        if (err) {
+            cb({}, err->message.isEmpty() ? QStringLiteral("rename was refused")
+                                          : err->message);
+            return;
+        }
+
+        // The pinned server always sends `changes`. `documentChanges` is the
+        // spec's richer form and is parsed too, so a conforming server change
+        // does not silently produce an empty edit — which would read as
+        // "nothing to rename" rather than as a client that stopped working.
+        WorkspaceEdit edit;
+        const QJsonObject root = result.toObject();
+        const QJsonObject changes = root.value("changes").toObject();
+        for (auto it2 = changes.constBegin(); it2 != changes.constEnd(); ++it2) {
+            QVector<LspTextEdit> edits;
+            for (const QJsonValue& v : it2.value().toArray()) {
+                const QJsonObject e = v.toObject();
+                edits.append(LspTextEdit{RangeFromJson(e.value("range").toObject()),
+                                         e.value("newText").toString()});
+            }
+            if (!edits.isEmpty()) edit.insert(it2.key(), edits);
+        }
+        for (const QJsonValue& v : root.value("documentChanges").toArray()) {
+            const QJsonObject entry = v.toObject();
+            const QString docUri =
+                entry.value("textDocument").toObject().value("uri").toString();
+            if (docUri.isEmpty()) continue;  // a create/rename/delete op, not an edit
+            QVector<LspTextEdit> edits = edit.value(docUri);
+            for (const QJsonValue& ev : entry.value("edits").toArray()) {
+                const QJsonObject e = ev.toObject();
+                edits.append(LspTextEdit{RangeFromJson(e.value("range").toObject()),
+                                         e.value("newText").toString()});
+            }
+            if (!edits.isEmpty()) edit.insert(docUri, edits);
+        }
+        cb(edit, QString());
+    },
+    kRenameTimeoutMs);
 }
 
 bool LspManager::isStdlibPath(const QString& path) const {

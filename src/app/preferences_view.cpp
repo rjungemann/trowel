@@ -50,6 +50,16 @@ PreferencesView::PreferencesView(QWidget* parent)
             this, &PreferencesView::commitRainbowBrackets);
     root->addWidget(rainbowCheck_);
 
+    bracketGuideCheck_ = new QCheckBox(QStringLiteral("Bracket pair guide"), this);
+    bracketGuideCheck_->setToolTip(QStringLiteral(
+        "Underline the expression enclosing the caret, in that pair's own "
+        "nesting-depth color. Falls back to the indent-guide color when "
+        "rainbow brackets are off."));
+    bracketGuideCheck_->setChecked(EditorView::bracketPairGuidesDefault());
+    connect(bracketGuideCheck_, &QCheckBox::toggled,
+            this, &PreferencesView::commitBracketPairGuides);
+    root->addWidget(bracketGuideCheck_);
+
     lspCheck_ = new QCheckBox(QStringLiteral("Language server"), this);
     lspCheck_->setToolTip(QStringLiteral(
         "Run `tur lsp` for inline errors, completion, and hover documentation. "
@@ -96,6 +106,11 @@ void PreferencesView::commitRainbowBrackets(bool enabled) {
     emit rainbowBracketsChanged(enabled);
 }
 
+void PreferencesView::commitBracketPairGuides(bool enabled) {
+    QSettings().setValue("editor/bracketPairGuides", enabled);
+    emit bracketPairGuidesChanged(enabled);
+}
+
 void PreferencesView::commitLspEnabled(bool enabled) {
     QSettings().setValue("lsp/enabled", enabled);
     // Turning it on mid-session is safe — the manager starts lazily on the next
@@ -109,6 +124,8 @@ void PreferencesView::restoreDefaults() {
     if (turPathEdit_) turPathEdit_->clear();
     QSettings().remove("editor/rainbowBrackets");
     if (rainbowCheck_) rainbowCheck_->setChecked(true);
+    QSettings().remove("editor/bracketPairGuides");
+    if (bracketGuideCheck_) bracketGuideCheck_->setChecked(true);
     QSettings().remove("lsp/enabled");
     if (lspCheck_) lspCheck_->setChecked(true);
 }

@@ -1,6 +1,8 @@
 #pragma once
 
+#include <QHash>
 #include <QString>
+#include <QVector>
 
 namespace trowel {
 
@@ -38,5 +40,26 @@ struct LspRange {
         return true;
     }
 };
+
+// A URI plus a span. `LspLocation` names a point — where to put the caret;
+// this names a region — what to select, or what to replace.
+struct LspSpan {
+    QString uri;
+    LspRange range;
+};
+
+// One edit from a `WorkspaceEdit`. Ranges are the server's, so they describe
+// the document as the server last saw it; applying them out of descending
+// order would invalidate the ones that follow.
+struct LspTextEdit {
+    LspRange range;
+    QString newText;
+};
+
+// A `WorkspaceEdit`, keyed by document URI.
+//
+// A free alias rather than a member of LspManager so consumers that only apply
+// edits — MainWindow — do not have to pull in the manager's whole interface.
+using LspWorkspaceEdit = QHash<QString, QVector<LspTextEdit>>;
 
 }

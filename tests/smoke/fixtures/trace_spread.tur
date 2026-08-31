@@ -1,0 +1,11 @@
+;; The same program as trace_typed.tur, spread across lines. Under per-line
+;; stepping this records hundreds of steps and real call depth where its twin
+;; records two -- which is the whole point: fidelity depended on formatting.
+(defn fib [n : int] : int
+  (if (< n 2)
+      n
+      (+
+        (fib (- n 1))
+        (fib (- n 2)))))
+(defn main [] : int
+  (fib 10))

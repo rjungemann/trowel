@@ -1,0 +1,16 @@
+;; Fixture for the active bracket-pair guide.
+;;
+;; Shapes on purpose: a single-line pair, a multi-line pair whose closer is
+;; indented past its opener, nesting three deep, and brackets inside a comment
+;; and a string that the scan must not count.
+(def single (+ 1 2))
+
+(defn multi [n : int] : int
+  (let [doubled (* n 2)]
+    (+ doubled
+       1)))
+
+;; a stray ( in a comment
+(def bracket-text "unclosed ( and ] inside a string")
+
+(def deep (+ 1 (* 2 (- 3 4))))

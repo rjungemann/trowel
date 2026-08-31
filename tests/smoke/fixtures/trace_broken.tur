@@ -1,0 +1,4 @@
+;; Does not compile. `tur trace` still prints a summary, so the client has
+;; to notice the error rather than reporting an empty recording.
+(defn main [] : int
+  (broken (

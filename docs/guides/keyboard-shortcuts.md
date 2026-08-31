@@ -41,6 +41,7 @@ Trowel decides where a file opens.
 | `Ctrl+Shift+R` | Restart REPL (in the current file's directory) |
 | `Ctrl+Shift+K` | Clear REPL output |
 | `Ctrl+Shift+F` | Format file (`tur format`) |
+| `Ctrl+Shift+T` | Trace buffer (record an execution trace with `tur trace`) |
 | `Ctrl+E` | Focus editor |
 | `Ctrl+T` | Focus REPL |
 | ``Ctrl+` `` | Toggle focus between editor and REPL |
@@ -55,12 +56,23 @@ highlights, since the language server speaks only Turmeric.
 | `Ctrl+Space` | Complete symbol at the caret |
 | `Ctrl+Shift+D` | Show documentation for the symbol at the caret |
 | `F12` | Go to definition |
+| `Shift+F12` | Find references (every use, across the workspace) |
+| `F2` | Rename symbol |
+| `Ctrl+Shift+M` | Show symbols (this file's outline) |
 | `Ctrl+Alt+-` | Go back (return to the position before the last jump) |
 | `Ctrl+Alt+Shift+-` | Go forward |
 
 Back and Forward deliberately avoid `Ctrl+Alt+Left`/`Right`, which several
 Linux desktops claim as a workspace switcher; the pair above is VS Code's
 alternate and is unclaimed on all three platforms.
+
+Rename is scope-aware: renaming a `let` binding or a parameter changes only its
+own scope, and renaming a top-level name reaches every workspace file that
+imports it. Those files are **opened as dirty tabs, never written to disk** —
+so Ctrl+Z undoes the whole thing and nothing changes underneath you. Trowel
+asks first when a rename would touch more than 20 files. If the server refuses
+(a stdlib symbol, a name defined in another file, an exported name), it says
+why in the status bar before the input appears.
 
 A definition inside the bundled Turmeric stdlib opens a read-only tab, marked
 `(ro)` in the tab bar. It stays out of *Open Recent* and out of the restored

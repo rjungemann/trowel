@@ -1,0 +1,11 @@
+;; The dense half of a pair: this and trace_spread.tur are the same `fib`,
+;; identically annotated, differing only in where the newlines fall.
+;;
+;; Under the per-line stepping of v0.42.0 and earlier this recorded 2 steps at
+;; depth 1 while its twin recorded 531 at depth 10 -- fidelity depended on
+;; formatting. Turmeric e7140c97c records per expression and the two now agree
+;; exactly. Nothing here is about the type annotations; the unannotated
+;; spelling always recorded identically. See editor-intelligence.md 5.3.1.
+(defn fib [n : int] : int
+  (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))
+(defn main [] : int (fib 10))

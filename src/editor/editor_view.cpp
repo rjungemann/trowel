@@ -10,12 +10,58 @@
 #include <QFileInfo>
 #include <QFont>
 #include <QFontInfo>
+#include <QKeyEvent>
+#include <QLineEdit>
+#include <QPainter>
+#include <QPen>
 #include <QSettings>
 #include <QTextStream>
 #include <QTimer>
 #include <QVBoxLayout>
 
 namespace trowel {
+
+// One vertical line, painted over the viewport. No Q_OBJECT: it has no signals
+// or slots, so it needs no moc and can live entirely in this file.
+class BracketGuideOverlay : public QWidget {
+public:
+    explicit BracketGuideOverlay(QWidget* parent) : QWidget(parent) {
+        // Never take a click. Without this the overlay would swallow every
+        // mouse event over the text it covers.
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        setAttribute(Qt::WA_NoSystemBackground);
+        setAttribute(Qt::WA_TranslucentBackground);
+        hide();
+    }
+
+    void setLine(int x, int top, int bottom, const QColor& color) {
+        x_ = x;
+        top_ = top;
+        bottom_ = bottom;
+        color_ = color;
+        show();
+        update();
+    }
+
+    void clearLine() {
+        x_ = -1;
+        hide();
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override {
+        if (x_ < 0 || bottom_ <= top_) return;
+        QPainter painter(this);
+        painter.setPen(QPen(color_, 1));
+        painter.drawLine(x_, top_, x_, bottom_);
+    }
+
+private:
+    int x_ = -1;
+    int top_ = 0;
+    int bottom_ = 0;
+    QColor color_;
+};
 
 namespace {
 constexpr int kLineNumberMargin = 0;
@@ -27,11 +73,44 @@ constexpr int kFoldMargin = 2;
 // should be able to act on.
 constexpr int kOutlineListType = 1;
 constexpr int kOutlineMessageListType = 2;
+constexpr int kChooserListType = 3;
 
 // Separates a row's name from its kind. An em dash rather than a hyphen so it
 // cannot be mistaken for part of a Turmeric identifier, which routinely
 // contains hyphens (`nav-total`, `list-head`).
 const char* const kOutlineKindSeparator = " — ";
+
+// How far the enclosing-pair scan will look before giving up, in bytes each
+// way. This runs on every caret move, so it is bounded rather than allowed to
+// walk a large file twice; a give-up paints nothing.
+constexpr int kBracketScanLimit = 64 * 1024;
+
+bool IsBracketChar(char c) {
+    return c == '(' || c == ')' || c == '[' || c == ']' || c == '{' || c == '}';
+}
+
+bool IsOpenBracket(char c) { return c == '(' || c == '[' || c == '{'; }
+
+// Is the bracket at this style a real one, or is it text inside a comment or a
+// string?
+//
+// Asked of the style rather than of a second parser: the lexer already styles a
+// `(` inside a string as String and inside a `;` comment as a comment style, so
+// a scan that consults the style skips both for free. This is the property that
+// makes the whole scan cheap (§4.2 of the editor intelligence plan).
+bool IsCodeStyle(int style) {
+    switch (static_cast<TurStyle>(style)) {
+        case TurStyle::LineComment:
+        case TurStyle::DocComment:
+        case TurStyle::BlockComment:
+        case TurStyle::String:
+        case TurStyle::StringEscape:
+        case TurStyle::CharLit:
+            return false;
+        default:
+            return true;
+    }
+}
 
 // How long the caret must sit still before occurrences are requested. Matches
 // the didChange debounce rather than inventing a second cadence, and it is the
@@ -50,6 +129,7 @@ EditorView::EditorView(QWidget* parent)
     applyDefaultStyling();
 
     rainbow_ = rainbowBracketsDefault();
+    bracketGuides_ = bracketPairGuidesDefault();
     installLexer();
     ApplyThemeToEditor(sci_, LoadBuiltinDarkTheme());
 
@@ -71,6 +151,9 @@ EditorView::EditorView(QWidget* parent)
         // A `#lang` line can be typed, pasted, or edited away at any moment,
         // so the language is re-derived per edit rather than only on open.
         refreshLanguage();
+        // An edit moves the brackets around the caret, so the guide has to be
+        // recomputed even when the caret itself did not move.
+        updateBracketGuide();
         emit contentChanged(docVersion_);
     });
 
@@ -99,6 +182,11 @@ EditorView::EditorView(QWidget* parent)
     connect(sci_, &ScintillaEditBase::notify, this,
             [this](Scintilla::NotificationData* scn) {
         if (!scn || scn->nmhdr.code != Scintilla::Notification::UserListSelection) return;
+        if (scn->listType == kChooserListType) {
+            const int row = chooserRows_.indexOf(QString::fromUtf8(scn->text));
+            if (row >= 0) emit listRowChosen(row);
+            return;
+        }
         if (scn->listType != kOutlineListType) return;  // a placeholder row
         const int index = outlineRows_.indexOf(QString::fromUtf8(scn->text));
         if (index < 0 || index >= outlineSymbols_.size()) return;
@@ -124,6 +212,10 @@ EditorView::EditorView(QWidget* parent)
         // flag test goes through the underlying type.
         using U = std::underlying_type_t<Scintilla::Update>;
         if (!(static_cast<U>(updated) & static_cast<U>(Scintilla::Update::Selection))) return;
+        // Repainted synchronously, unlike the occurrence highlight: the pair is
+        // computed locally from styles that are already there, so there is
+        // nothing to wait for and a debounce would only make it lag the caret.
+        updateBracketGuide();
         // The old set describes wherever the caret used to be. Dropping it now
         // rather than on reply means the highlight never lags the caret.
         clearOccurrences();
@@ -201,6 +293,18 @@ void EditorView::applyDefaultStyling() {
     // omits the diagnostics block.
     sci_->indicSetFore(diag::kErrorIndicator, 0x0000CC);
     sci_->indicSetFore(diag::kWarningIndicator, 0x00A0D0);
+
+    // The active bracket-pair guide: one straight line under the enclosing
+    // expression. Its colour is set per update from the pair's own depth style,
+    // so only the shape is configured here.
+    sci_->indicSetStyle(bracketguide::kIndicator, INDIC_PLAIN);
+
+    guideOverlay_ = new BracketGuideOverlay(sci_->viewport());
+    // Scintilla emits `painted` after every repaint, which covers scrolling,
+    // resizing and wrapping in one hook — cheaper and more reliable than
+    // chasing each of those separately.
+    connect(sci_, &ScintillaEditBase::painted, this,
+            [this] { repositionBracketGuideOverlay(); });
 
     // Hover: how long the mouse must rest before dwellStart fires.
     sci_->setMouseDwellTime(500);
@@ -490,6 +594,72 @@ void EditorView::setOccurrences(const QVector<LspRange>& ranges) {
     }
 }
 
+void EditorView::showRenameInput(const LspRange& range, const QString& placeholder) {
+    if (!renameInput_) {
+        // Parented to the Scintilla widget so it scrolls out of view with the
+        // text rather than floating over a document that has moved underneath
+        // it. Created lazily: most buffers never rename anything.
+        renameInput_ = new QLineEdit(sci_);
+        renameInput_->setFrame(true);
+        renameInput_->hide();
+        connect(renameInput_, &QLineEdit::returnPressed, this, [this] {
+            const QString name = renameInput_->text().trimmed();
+            hideRenameInput();
+            if (!name.isEmpty()) emit renameCommitted(name);
+        });
+        // Escape and focus loss both mean "never mind". Without the second, a
+        // click into the editor would leave an orphaned box over the text.
+        renameInput_->installEventFilter(this);
+    }
+
+    const int docEnd = static_cast<int>(sci_->textLength());
+    const int start = qBound(0, posFromLineCol(range.startLine, range.startCharacter), docEnd);
+    const int x = static_cast<int>(sci_->pointXFromPosition(start));
+    const int y = static_cast<int>(sci_->pointYFromPosition(start));
+
+    renameInput_->setFont(currentFont_);
+    renameInput_->setText(placeholder);
+    renameInput_->selectAll();
+    // Wide enough for a longer name than the one being replaced, since that is
+    // the usual direction of travel.
+    const int width = qMax(120, renameInput_->fontMetrics().horizontalAdvance(placeholder) + 48);
+    renameInput_->setGeometry(x, y, width, renameInput_->sizeHint().height());
+    renameInput_->show();
+    renameInput_->raise();
+    renameInput_->setFocus(Qt::OtherFocusReason);
+}
+
+void EditorView::hideRenameInput() {
+    if (!renameInput_ || !renameInput_->isVisible()) return;
+    renameInput_->hide();
+    sci_->setFocus(Qt::OtherFocusReason);
+}
+
+bool EditorView::renameInputVisible() const {
+    return renameInput_ && renameInput_->isVisible();
+}
+
+QString EditorView::renameInputText() const {
+    return renameInput_ ? renameInput_->text() : QString();
+}
+
+bool EditorView::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == renameInput_) {
+        if (event->type() == QEvent::KeyPress) {
+            auto* key = static_cast<QKeyEvent*>(event);
+            if (key->key() == Qt::Key_Escape) {
+                hideRenameInput();
+                emit renameCancelled();
+                return true;
+            }
+        } else if (event->type() == QEvent::FocusOut) {
+            hideRenameInput();
+            emit renameCancelled();
+        }
+    }
+    return TabContent::eventFilter(watched, event);
+}
+
 QString EditorView::diagnosticMessageAt(int pos) const {
     for (const LspDiagnostic& d : diagnostics_) {
         const auto [start, end] = rangeForDiagnostic(d);
@@ -515,6 +685,163 @@ void EditorView::showCompletions(const QStringList& labels, int lengthEntered) {
     sci_->autoCSetChooseSingle(false);
     sci_->autoCSetIgnoreCase(false);
     sci_->autoCShow(lengthEntered, sorted.join('\n').toUtf8().constData());
+}
+
+std::pair<int, int> EditorView::enclosingBracketPair(int pos) const {
+    const int docEnd = static_cast<int>(sci_->textLength());
+    pos = qBound(0, pos, docEnd);
+
+    // Backward: find the nearest opener the caret is inside of. A closer seen
+    // on the way means a whole pair was passed over, so it cancels one opener.
+    int opener = -1;
+    int depth = 0;
+    const int backStop = qMax(0, pos - kBracketScanLimit);
+    for (int i = pos - 1; i >= backStop; --i) {
+        const char c = static_cast<char>(sci_->charAt(i));
+        if (!IsBracketChar(c) || !IsCodeStyle(styleAt(i))) continue;
+        if (IsOpenBracket(c)) {
+            if (depth == 0) { opener = i; break; }
+            --depth;
+        } else {
+            ++depth;
+        }
+    }
+    if (opener < 0) return {-1, -1};
+
+    // Forward: the matching closer. Counted rather than read off the style —
+    // rainbow styles cycle mod 7, so depth 0 and depth 7 are the same colour
+    // and a style comparison would match the wrong bracket on a deep form.
+    int closer = -1;
+    depth = 0;
+    const int fwdStop = qMin(docEnd, opener + 1 + kBracketScanLimit);
+    for (int i = opener + 1; i < fwdStop; ++i) {
+        const char c = static_cast<char>(sci_->charAt(i));
+        if (!IsBracketChar(c) || !IsCodeStyle(styleAt(i))) continue;
+        if (IsOpenBracket(c)) {
+            ++depth;
+        } else if (depth == 0) {
+            closer = i;
+            break;
+        } else {
+            --depth;
+        }
+    }
+    if (closer < 0) return {-1, -1};  // unbalanced, or past the scan bound
+    return {opener, closer};
+}
+
+void EditorView::clearBracketGuide() {
+    bracketGuideSpan_ = {-1, -1};
+    guideOpener_ = guideCloser_ = -1;
+    if (guideOverlay_) guideOverlay_->clearLine();
+    sci_->setIndicatorCurrent(bracketguide::kIndicator);
+    sci_->indicatorClearRange(0, sci_->textLength());
+}
+
+void EditorView::repositionBracketGuideOverlay() {
+    if (!guideOverlay_) return;
+    guideLine_ = GuideLine{};
+    if (guideOpener_ < 0 || guideCloser_ < 0) { guideOverlay_->clearLine(); return; }
+
+    const int openerLine = static_cast<int>(sci_->lineFromPosition(guideOpener_));
+    const int closerLine = static_cast<int>(sci_->lineFromPosition(guideCloser_));
+    // A single-line pair has no vertical extent; the horizontal segment already
+    // says everything there is to say about it.
+    if (openerLine == closerLine) { guideOverlay_->clearLine(); return; }
+
+    guideOverlay_->setGeometry(sci_->viewport()->rect());
+
+    const int x = static_cast<int>(sci_->pointXFromPosition(guideOpener_));
+    // From the top of the opener's line to the top of the closer's, which is
+    // Monaco's extent: it emits a guide *on* each line from the opener's
+    // through the one before the closer, rather than in the gap between them.
+    //
+    // The distinction is not cosmetic. For the overwhelmingly common lisp shape
+    // — a form whose closer sits on the very next line — a gap-based spine has
+    // zero height and vanishes exactly where it is most wanted.
+    const int top = static_cast<int>(sci_->pointYFromPosition(guideOpener_));
+    const int bottom = static_cast<int>(sci_->pointYFromPosition(guideCloser_));
+    if (bottom <= top) { guideOverlay_->clearLine(); return; }
+
+    const int styleForColor =
+        rainbow_ ? styleAt(guideCloser_) : static_cast<int>(STYLE_INDENTGUIDE);
+    const sptr_t bgr = sci_->styleFore(styleForColor);
+    // Scintilla stores colours as 0xBBGGRR, the reverse of QColor's argument
+    // order, so the channels are unpacked rather than cast.
+    const QColor color(static_cast<int>(bgr & 0xFF),
+                       static_cast<int>((bgr >> 8) & 0xFF),
+                       static_cast<int>((bgr >> 16) & 0xFF));
+    guideOverlay_->setLine(x, top, bottom, color);
+    guideOverlay_->raise();
+    guideLine_ = GuideLine{true, x, top, bottom};
+}
+
+void EditorView::updateBracketGuide() {
+    clearBracketGuide();
+    if (!bracketGuides_) return;
+    // Only the lisps carry rainbow depth styles, and the scan's comment/string
+    // skipping is written against TurStyle. Other languages get nothing rather
+    // than a guide computed from styles that mean something else.
+    if (language_ != Language::Turmeric) return;
+
+    const auto [opener, closer] = enclosingBracketPair(cursorPos());
+    if (opener < 0 || closer < 0) return;  // top level, or the scan gave up
+
+    const int openerLine = static_cast<int>(sci_->lineFromPosition(opener));
+    const int closerLine = static_cast<int>(sci_->lineFromPosition(closer));
+
+    int start = 0;
+    if (openerLine == closerLine) {
+        // Monaco draws a single-line pair's segment between the brackets rather
+        // than under them (guidesTextModelPart.js: opener's *end* column to the
+        // closer's column), and it does draw one — `includeSingleLinePairs` is
+        // hardcoded true. Matched here rather than reinvented.
+        start = opener + 1;
+    } else {
+        // Multi-line: the segment sits on the closing line, running from the
+        // guide column to the closer. Monaco's guide column is the smaller of
+        // the two bracket columns, which keeps the line inside the text when
+        // the closer is indented past its opener.
+        const int openerCol = opener - static_cast<int>(sci_->positionFromLine(openerLine));
+        const int closerLineStart = static_cast<int>(sci_->positionFromLine(closerLine));
+        const int closerCol = closer - closerLineStart;
+        start = closerLineStart + qMin(openerCol, closerCol);
+    }
+    // Closer inclusive: the segment should visibly terminate at the bracket it
+    // belongs to rather than stopping one character short of it.
+    const int end = closer + 1;
+    if (end <= start) return;
+
+    // The pair's own depth colour, read back off the closing bracket's style.
+    // Opener and closer share a style by construction (the scanner increments
+    // after emitting an opener and decrements before emitting a closer), so
+    // this cannot drift out of sync with the parens it belongs to.
+    //
+    // With rainbow brackets off there is no depth colour — brackets fall back
+    // to the flat Delim/CurlyInfix styles — so the guide takes the neutral
+    // indent-guide colour instead of hiding. Hiding would tie two unrelated
+    // preferences together, and the guide's job (showing how far the current
+    // expression reaches) is just as useful in one colour.
+    const int styleForColor =
+        rainbow_ ? styleAt(closer) : static_cast<int>(STYLE_INDENTGUIDE);
+    sci_->indicSetFore(bracketguide::kIndicator, sci_->styleFore(styleForColor));
+
+    sci_->setIndicatorCurrent(bracketguide::kIndicator);
+    sci_->indicatorFillRange(start, end - start);
+    bracketGuideSpan_ = {start, end};
+
+    guideOpener_ = opener;
+    guideCloser_ = closer;
+    repositionBracketGuideOverlay();
+}
+
+bool EditorView::bracketPairGuidesDefault() {
+    return QSettings().value("editor/bracketPairGuides", true).toBool();
+}
+
+void EditorView::setBracketPairGuides(bool enabled) {
+    bracketGuides_ = enabled;
+    updateBracketGuide();
 }
 
 int EditorView::symbolIndexAtCaret(const QVector<LspSymbol>& symbols) const {
@@ -596,6 +923,34 @@ void EditorView::showSymbolList(const QVector<LspSymbol>& symbols) {
     if (current >= 0) {
         sci_->autoCSelect(outlineRows_.at(current).toUtf8().constData());
     }
+}
+
+void EditorView::showChooserList(const QStringList& rows) {
+    chooserRows_ = rows;
+    if (rows.isEmpty()) {
+        sci_->autoCCancel();
+        return;
+    }
+    sci_->autoCSetSeparator('\n');
+    sci_->autoCSetOrder(SC_ORDER_CUSTOM);
+    sci_->autoCSetIgnoreCase(false);
+    sci_->autoCSetChooseSingle(false);
+    sci_->userListShow(kChooserListType, rows.join('\n').toUtf8().constData());
+}
+
+void EditorView::beginEditGroup() { sci_->beginUndoAction(); }
+void EditorView::endEditGroup() { sci_->endUndoAction(); }
+
+void EditorView::replaceRange(const LspRange& range, const QString& text) {
+    const int docEnd = static_cast<int>(sci_->textLength());
+    const int start = qBound(0, posFromLineCol(range.startLine, range.startCharacter), docEnd);
+    const int end = qBound(start, posFromLineCol(range.endLine, range.endCharacter), docEnd);
+    // The target range, not the selection: replaceSel would move the caret to
+    // every edited site in turn and leave it wherever the last one happened to
+    // be, which for a multi-site rename is nowhere the user was.
+    sci_->setTargetRange(start, end);
+    const QByteArray utf8 = text.toUtf8();
+    sci_->replaceTarget(utf8.size(), utf8.constData());
 }
 
 void EditorView::showOutlineMessage(const QString& message) {

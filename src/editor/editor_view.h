@@ -13,9 +13,23 @@
 #include <utility>
 
 class ScintillaEdit;
+class QLineEdit;
 class QTimer;
 
 namespace trowel {
+
+// The vertical half of the bracket-pair guide, drawn as a transparent overlay
+// over Scintilla's viewport.
+//
+// Scintilla's own indentation guides are the wrong tool: they sit at multiples
+// of the indent width in the single STYLE_INDENTGUIDE colour, and a lisp opener
+// is rarely at a multiple of the indent width — they would draw a line in the
+// wrong column in the wrong colour.
+//
+// Defined in the .cpp. If minimap phase 4 ever lands its own overlay pass, this
+// should fold into it rather than stack a second transparent widget over the
+// same viewport (see minimap.md and editor-intelligence.md §4.4).
+class BracketGuideOverlay;
 
 // Scintilla indicator and marker slots used for diagnostics.
 //
@@ -35,6 +49,16 @@ constexpr int kWarningMarker = 1;
 // not read as one.
 namespace occurrence {
 constexpr int kIndicator = 10;
+}
+
+// The active bracket-pair guide: a single straight line under the expression
+// enclosing the caret, in that pair's own nesting-depth colour.
+//
+// 11 is left free so the definition/use split occurrence highlighting
+// deliberately does not make (see editor-intelligence.md §3.2) stays cheap to
+// add later without renumbering anything.
+namespace bracketguide {
+constexpr int kIndicator = 12;
 }
 
 class EditorView : public TabContent {
@@ -61,6 +85,26 @@ public:
     // Toggle rainbow (depth-colored) brackets and re-lex the whole document.
     void setRainbowBrackets(bool enabled);
     bool rainbowBrackets() const { return rainbow_; }
+
+    // The bracket pair enclosing `pos`, or a pair of -1s when there is none.
+    //
+    // Ours to compute: SCI_BRACEMATCH only answers when the caret is already
+    // adjacent to a brace, and Scintilla has no notion of "the pair enclosing
+    // this position". The scan counts only bracket characters the lexer did not
+    // style as a comment or a string, which is what makes it skip a `(` inside
+    // either without a second parser.
+    //
+    // Bounded: it gives up rather than stall, because it runs on every caret
+    // move. Giving up paints nothing, which is the honest failure.
+    std::pair<int, int> enclosingBracketPair(int pos) const;
+
+    // Paint the guide for the pair enclosing the caret, clearing the previous
+    // one first. A no-op when the preference is off.
+    void updateBracketGuide();
+    void clearBracketGuide();
+    void setBracketPairGuides(bool enabled);
+    bool bracketPairGuides() const { return bracketGuides_; }
+    static bool bracketPairGuidesDefault();
 
     // Language this buffer is highlighted as, derived from its path and any
     // `#lang` directive it carries.
@@ -116,6 +160,45 @@ public:
     void setOccurrences(const QVector<LspRange>& ranges);
     void clearOccurrences();
     const QVector<LspRange>& occurrences() const { return occurrences_; }
+    std::pair<int, int> bracketGuideSpan() const { return bracketGuideSpan_; }
+
+    // Where the vertical overlay is drawn, in viewport pixels. `visible` is
+    // false for a single-line pair (no vertical extent) and when there is no
+    // enclosing pair at all. Exposed so a test can assert on the line that was
+    // painted rather than on the pair that was computed.
+    struct GuideLine {
+        bool visible = false;
+        int x = 0;
+        int top = 0;
+        int bottom = 0;
+    };
+    GuideLine bracketGuideLine() const { return guideLine_; }
+
+    // Show an arbitrary chooser as a user list. Rows are displayed verbatim and
+    // the chosen row's index comes back through `listRowChosen` — unlike the
+    // outline, the caller owns what a row means.
+    void showChooserList(const QStringList& rows);
+
+    // Apply one `TextEdit` in place, without disturbing the selection.
+    //
+    // Callers must wrap a batch in beginEditGroup/endEditGroup and apply it in
+    // *descending* position order: every range in a WorkspaceEdit is stated
+    // against the document as the server saw it, so an earlier edit that
+    // changes length invalidates every later one.
+    void replaceRange(const LspRange& range, const QString& text);
+    void beginEditGroup();
+    void endEditGroup();
+
+    // Show the rename input over `range`, pre-filled with `placeholder`.
+    //
+    // Non-modal by design. A modal dialog would block the control socket's
+    // event loop, so every smoke test that reached a rename would hang rather
+    // than fail — and a rename that cannot be tested is the one operation in
+    // this editor least able to afford it.
+    void showRenameInput(const LspRange& range, const QString& placeholder);
+    void hideRenameInput();
+    bool renameInputVisible() const;
+    QString renameInputText() const;
 
     // Make this buffer unwritable. Used for stdlib files opened by a definition
     // jump: they live inside the app bundle, where an edit either invalidates
@@ -159,6 +242,15 @@ signals:
     // turns it into a jump so the same history stack covers outline and
     // definition navigation alike.
     void outlineSymbolChosen(int line, int character);
+    // A row of the last showChooserList() was picked.
+    void listRowChosen(int index);
+    // The rename input was confirmed with Enter, or dismissed with Escape.
+    void renameCommitted(const QString& newName);
+    void renameCancelled();
+
+protected:
+    // Watches the rename input for Escape and focus loss.
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
     void applyDefaultStyling();
@@ -195,6 +287,20 @@ private:
     // handles them one at a time.
     QTimer* occurrenceDebounce_ = nullptr;
     QVector<LspRange> occurrences_;
+    QStringList chooserRows_;
+    QLineEdit* renameInput_ = nullptr;
+    bool bracketGuides_ = true;
+    BracketGuideOverlay* guideOverlay_ = nullptr;
+    // The pair the overlay is currently drawing, kept so it can be repositioned
+    // on scroll without recomputing the scan.
+    int guideOpener_ = -1;
+    int guideCloser_ = -1;
+    GuideLine guideLine_;
+    // Reposition the vertical overlay from guideOpener_/guideCloser_.
+    void repositionBracketGuideOverlay();
+    // The span the guide currently occupies, so the control API can read back
+    // what was painted rather than recomputing it.
+    std::pair<int, int> bracketGuideSpan_{-1, -1};
 };
 
 }
