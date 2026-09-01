@@ -82,3 +82,51 @@ def test_run_syntax_error_does_not_kill_repl(trowel, fixture_files: Path):
     trowel.send("(+ 1 1)")
     hit = trowel.wait_output("2", timeout_ms=3000)
     assert "2" in hit["matched"]
+
+
+def test_run_buffer_invokes_main(trowel, tmp_path: Path):
+    # The bug this guards: Run Buffer used `(load ...)`, which evaluates the
+    # top-level forms and stops. A program shaped the way Turmeric programs are
+    # shaped — a `defn main` and nothing else at the top level — therefore
+    # defined `main`, printed `=> #<fn main>`, and never ran a line of it,
+    # while Run Buffer reported success.
+    src = tmp_path / "hasmain.tur"
+    src.write_text(
+        '(defn main [] : int\n'
+        '  (println "main-ran-marker")\n'
+        '  0)\n')
+    trowel.wait_output("turmeric>", timeout_ms=5000)
+    trowel.call("editor.open", {"path": str(src)})
+    trowel.call("run.buffer")
+    hit = trowel.wait_output("main-ran-marker", timeout_ms=5000)
+    assert "main-ran-marker" in hit["matched"]
+
+
+def test_run_buffer_without_main_still_runs_top_level(trowel, tmp_path: Path):
+    # The other half: auto-invoking main must not have made a script of bare
+    # top-level forms stop working, and must not error about a missing `main`.
+    src = tmp_path / "nomain.tur"
+    src.write_text('(println "toplevel-ran-marker")\n')
+    trowel.wait_output("turmeric>", timeout_ms=5000)
+    trowel.call("editor.open", {"path": str(src)})
+    trowel.call("run.buffer")
+    hit = trowel.wait_output("toplevel-ran-marker", timeout_ms=5000)
+    assert "toplevel-ran-marker" in hit["matched"]
+    trowel.wait_idle(quiet_ms=400, timeout_ms=5000)
+    screen = trowel.call("repl.get_screen", {"lines": 40})["text"]
+    assert "unbound symbol 'main'" not in screen, screen
+
+
+def test_run_dirty_buffer_invokes_main(trowel, tmp_path: Path):
+    # The scratch-file path has to invoke main too, not just the clean one.
+    src = tmp_path / "dirtymain.tur"
+    src.write_text('(defn main [] : int 0)\n')
+    trowel.wait_output("turmeric>", timeout_ms=5000)
+    trowel.call("editor.open", {"path": str(src)})
+    trowel.call("editor.set_text", {"text":
+        '(defn main [] : int\n'
+        '  (println "dirty-main-marker")\n'
+        '  0)\n'})
+    trowel.call("run.buffer")
+    hit = trowel.wait_output("dirty-main-marker", timeout_ms=5000)
+    assert "dirty-main-marker" in hit["matched"]
