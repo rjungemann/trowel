@@ -1,13 +1,17 @@
 # Editor intelligence: rename, the tracer, and bracket-pair guides — plan
 
-> **Status:** **Track R and track G shipped; track T shipped through T1.**
-> T0 done and verified (§2), plus a follow-on bump to **`v0.42.1`** (§2.1) for
-> the per-expression tracer. R1 had already landed under
-> `lsp-navigation.md` T3; R2/R3/R4 and G1/G2/G3 are built and tested. T1 is
-> built. Its first conclusion — that typed code cannot be traced — was **wrong
-> and is retracted in §5.3.1**; the cause was source layout under line-granular
-> stepping, fixed upstream by Turmeric `e7140c97c`. T3–T6 are not blocked, and
-> need only a pin bump past that commit (§5.5). Deviations are in §9.
+> **Status:** **All three tracks shipped.** T0 done and verified (§2), with
+> follow-on bumps to **`v0.42.1`** (§2.1, the per-expression tracer) and
+> **`v0.42.2`** (the replay timeline extension, §5.5.1). R1 had already landed
+> under `lsp-navigation.md` T3; R2/R3/R4 and G1/G2/G3 are built and tested.
+> Track T is complete: T1 (the `tur trace` runner), T2 (`debugger-support.md`
+> phases 1–3), T3 (replay + reverse execution), and T4–T6 (the scrubber, the
+> rewinding console, the depth ribbon). T1's first conclusion — that typed code
+> cannot be traced — was **wrong and is retracted in §5.3.1**; the cause was
+> source layout under line-granular stepping, fixed upstream by `e7140c97c`.
+> **§5.5.2 is the one to read before touching any of this**: it records what
+> the Try Turmeric precedent settled, and the two design errors that came from
+> not reading it first. Deviations are in §9.
 > **Related:** [`lsp-support.md`](lsp-support.md) (phase 1 landed; this is a
 > second follow-up alongside `lsp-navigation.md`),
 > [`lsp-navigation.md`](lsp-navigation.md) (owns definition / outline /
@@ -681,14 +685,15 @@ papered over:
 | **T1** | A **"Trace"** action beside "Run Buffer" that shells out to `tur trace`, writes to a temp `.turtrace`, and prints the summary line into the REPL pane. No timeline. | A traced fixture reports a plausible step count; the three §5.3 cases each produce a *specific* message, not an empty panel |
 | **T2** | `debugger-support.md` phases 1–3 (transport, launch, breakpoints, stack, variables) — **not this plan's work**, listed for ordering | Its own gates |
 | **T3** — **built** | `"replay": true` launch; wire `stepBack` / `reverseContinue` / `reverseNext` to controls; the gutter follows the cursor | Stepping backward into a returned frame shows that frame's values |
-| **T4** — **blocked**, §5.5.1–2 | The timeline strip: a slider over `[0, steps)`, first / step-back / step-forward / last, `file:line` for the cursor. Coalesce seeks — a drag issues one seek at a time and remembers only the most recent target | Scrubbing a recursive fixture end to end moves the gutter monotonically and never exceeds peak depth |
-| **T5** — **blocked**, §5.5.1–2 | Console replay: the REPL pane shows what the program had printed by the cursor's step, and puts the user's own transcript back on close | Scrubbing backwards rewinds the transcript |
-| **T6** — **blocked**, §5.6 and §5.5.1–2 | A **call-depth ribbon** under the slider (§5.6) | Recursion shape is visible at a glance and the ribbon never disagrees with the frame count |
+| **T4** — **built** | The timeline strip: a slider over `[0, steps)`, first / step-back / step-forward / last, `file:line` for the cursor. Coalesce seeks — a drag issues one seek at a time and remembers only the most recent target | Scrubbing a recursive fixture end to end moves the gutter monotonically and never exceeds peak depth |
+| **T5** — **built** | Console replay: the REPL pane shows what the program had printed by the cursor's step, and puts the user's own transcript back on close | Scrubbing backwards rewinds the transcript |
+| **T6** — **built** | A **call-depth ribbon** under the slider (§5.6) | Recursion shape is visible at a glance and the ribbon never disagrees with the frame count |
 
-**Read [§5.5.2](#552-the-precedent--what-try-turmeric-actually-does) before
-starting any of T4–T6.** Try Turmeric has already built this once; the seek
-loop, the coalescing, the ribbon's data source and the last-step output case
-are all settled there.
+**All of T4–T6 shipped**, against Turmeric **v0.42.2** (PR #798 merged
+2026-09-01; `TROWEL_TURMERIC_VERSION` bumped with it, and the three platform
+`URL_HASH` checksums with that — the pin and the hashes are one edit, not two).
+`TimelineStrip` carries the scrubber and the ribbon; `replayOutput` rewinds the
+console. §5.5.2 records what the precedent settled and what it corrected.
 
 T1 is worth shipping alone: it is an afternoon, it costs nothing to throw away,
 and it is what answers §5.3's three questions with real fixtures before any UI
@@ -794,9 +799,8 @@ precedent for the sequencing: land it upstream, cut a release, bump the pin.
 > `turi_wasm_trace_output_full` rather than the fixture edit the branch
 > currently carries.
 
-> **Written, on an upstream branch.** `../turmeric` branch `dap-replay-seek`
-> (worktree `~/Projects/turmeric/dap-replay-seek`, commit `de6c340bc`) adds
-> exactly that, advertised as `supportsTurmericReplayTimeline`:
+> **Shipped in Turmeric v0.42.2** (PR #798, merged 2026-09-01), advertised as
+> `supportsTurmericReplayTimeline`:
 >
 > | Request | Arguments | Body |
 > | --- | --- | --- |
@@ -896,10 +900,16 @@ naming "the depth ribbon" as its caller describes an anticipated one. §5.6 is
 right that T6 is unbuilt anywhere; it is now also clear what it should be built
 *on*.
 
-**Sequencing, unchanged and still upstream's:** (1) and (2) are fixed; what
-remains is merge, cut a release, bump `TROWEL_TURMERIC_VERSION`, and only then
-build T4–T6 against a pinned binary that ships the requests. Building against
-an unmerged branch would pin Trowel to a `tur` no user has.
+**Sequencing, completed.** (1) and (2) were fixed on the branch, PR #798
+merged, v0.42.2 released, and `TROWEL_TURMERIC_VERSION` moved to it — so T4–T6
+were built against a binary users actually get, not an unmerged branch.
+
+The capability is still read off the `initialize` response rather than inferred
+from the pin, because `ResolveTurBinary()` honours a QSettings override and
+PATH: the `tur` on the other end is not necessarily the one the pin names. The
+timeline tests skip rather than fail when it is absent, and `TROWEL_TEST_TUR`
+points the suite at a locally built toolchain — which is how they were verified
+before the release existed.
 
 **When T4–T6 do start, the Trowel side already has the shapes it needs.**
 `DebugSession` should read `supportsTurmericReplayTimeline` off the
