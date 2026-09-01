@@ -34,6 +34,18 @@ constexpr int kShortRecordingSteps = 16;
 
 }  // namespace
 
+bool DefinesMainEntry(const QByteArray& source) {
+    // `(defn main` at the start of a line, allowing leading whitespace and the
+    // `defn-` / `defn*` spellings the reader also accepts. Anchored to a line
+    // start because a nested `(defn main ...)` inside another form is not the
+    // entry point, and unanchored matching would find `main` in a comment
+    // about main.
+    static const QRegularExpression re(
+        R"(^[ \t]*\((?:defn|defn-|defn\*)[ \t]+main[ \t\[\n])",
+        QRegularExpression::MultilineOption);
+    return re.match(QString::fromUtf8(source)).hasMatch();
+}
+
 TraceRunner::TraceRunner(TerminalView* terminal, QObject* parent)
     : QObject(parent)
     , terminal_(terminal)

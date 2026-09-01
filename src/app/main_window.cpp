@@ -1745,6 +1745,29 @@ void MainWindow::startDebugSession(bool replay) {
         }
     }
 
+    // `tur dap` instruments what `(main)` evaluates and nothing else, so a file
+    // whose work sits at the top level runs straight through: no entry stop, no
+    // breakpoint hits, just output and an exit. Worse, `setBreakpoints` answers
+    // `verified: true` for it, so the gutter shows a solid breakpoint that can
+    // never bind — the session looks broken rather than inapplicable.
+    //
+    // Said before the process is spawned rather than inferred afterwards.
+    // `TraceRunner` has carried the same rule for `tur trace` since T1; this is
+    // that rule, shared.
+    const bool hasMain = DefinesMainEntry(v->text());
+    if (!hasMain) {
+        statusBar()->show();
+        statusBar()->showMessage(
+            breakpoints_ && !breakpoints_->forFile(v->filePath()).isEmpty()
+                ? QStringLiteral("This file's work is at the top level, so the "
+                                 "debugger will not stop — breakpoints only bind "
+                                 "inside `(defn main [] …)`.")
+                : QStringLiteral("This file's work is at the top level. It will "
+                                 "run, but the debugger only steps inside "
+                                 "`(defn main [] …)`."),
+            8000);
+    }
+
     debug_->start(v->filePath(), replWorkingDir(), extraEnv, debugStopOnEntry_, replay);
     debugStopOnEntry_ = false;  // one-shot: the menu action always runs to completion
     statusBar()->show();

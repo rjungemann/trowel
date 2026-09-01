@@ -68,6 +68,24 @@ enum class TraceOutcome {
     Recorded,        // a real recording
 };
 
+// Does this source define a top-level `main`?
+//
+// The one rule two features both need. `tur trace` records what `(main)`
+// evaluates and `tur dap` only instruments the same call, so a file whose work
+// happens at the top level records nothing and stops nowhere — measured: with
+// `stopOnEntry` *and* a breakpoint the adapter reports `verified: true`, then
+// emits `output`, `exited`, `terminated` and no `stopped` at all. The identical
+// file with its body moved into `main` stops on the first try.
+//
+// `TraceRunner` used to infer this after the fact, from a `0 steps` summary.
+// The debugger cannot: it gets a verified breakpoint and silence. Asking the
+// source directly is what lets both say so *before* spending a process.
+//
+// Textual on purpose. A `#lang` line can rebind almost anything, so this is a
+// heuristic, and it is the same heuristic Try Turmeric applies before running
+// `(main)` after loading a file's forms.
+bool DefinesMainEntry(const QByteArray& source);
+
 // Runs `tur trace` over a single file and reports what came back.
 //
 // Deliberately not through ReplSession, for the same reason ProjectRunner is
