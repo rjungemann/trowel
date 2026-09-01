@@ -1,6 +1,9 @@
 #include "debug/breakpoint_model.h"
 
 #include <QFileInfo>
+#include <QHash>
+
+#include <algorithm>
 
 namespace trowel {
 
@@ -94,6 +97,50 @@ void BreakpointModel::setCondition(const QString& path, int line,
     const int i = indexOf(path, line);
     if (i < 0 || breakpoints_[i].condition == condition) return;
     breakpoints_[i].condition = condition;
+    emit changed(path);
+}
+
+void BreakpointModel::applyLineMoves(const QString& path,
+                                     const QVector<QPair<int, int>>& moves) {
+    if (moves.isEmpty()) return;
+    // Applied as one batch against a snapshot, not one at a time. Moves
+    // routinely overlap — inserting a line above two adjacent breakpoints
+    // produces {5→6, 6→7}, and applying 5→6 first would land on top of the
+    // breakpoint still sitting at 6 and lose one of them.
+    QHash<int, int> byOldLine;
+    for (const auto& m : moves) byOldLine.insert(m.first, m.second);
+
+    QVector<Breakpoint> updated;
+    updated.reserve(breakpoints_.size());
+    bool didChange = false;
+    for (const Breakpoint& b : breakpoints_) {
+        if (b.path != path || !byOldLine.contains(b.line)) {
+            updated.append(b);
+            continue;
+        }
+        const int to = byOldLine.value(b.line);
+        didChange = true;
+        // 0 means the line holding it was deleted; the breakpoint goes with
+        // it rather than sliding onto whatever is now at that number.
+        if (to < 1) continue;
+        Breakpoint moved = b;
+        moved.line = to;
+        updated.append(moved);
+    }
+    if (!didChange) return;
+
+    // A move can land on a line that already has one. Keep the first and drop
+    // the rest: two breakpoints on one line is a state the model has no way
+    // to render and the adapter no way to honour.
+    QVector<Breakpoint> deduped;
+    for (const Breakpoint& b : updated) {
+        const bool dup = std::any_of(
+            deduped.cbegin(), deduped.cend(), [&b](const Breakpoint& o) {
+                return o.path == b.path && o.line == b.line;
+            });
+        if (!dup) deduped.append(b);
+    }
+    breakpoints_ = deduped;
     emit changed(path);
 }
 

@@ -1,16 +1,26 @@
 #pragma once
 
+#include "debug/breakpoint_model.h"
+#include "debug/debug_session.h"
+
+#include <QStringList>
+#include <QVector>
 #include <QWidget>
 
+class QLabel;
+class QLineEdit;
+class QListWidget;
 class QPlainTextEdit;
+class QSplitter;
 class QToolBar;
+class QTreeWidget;
 
 namespace trowel {
 
-// The Debugger tab's contents. Phase 2 shipped a read-only output console;
-// phase 3 adds the stepping toolbar. The stack, variables, and breakpoints
-// panels land in later phases. Lives in the REPL pane (not the editor stack),
-// so it is a plain QWidget, not a TabContent.
+// The Debugger tab's contents: a stepping toolbar, the call stack and
+// variables panes, and a read-only output console with an evaluate line.
+// Lives in the REPL pane (not the editor stack), so it is a plain QWidget,
+// not a TabContent.
 class DebuggerView : public QWidget {
     Q_OBJECT
 public:
@@ -18,13 +28,41 @@ public:
 
     // Append a chunk of debuggee output (from a DAP `output` event).
     void appendOutput(const QString& text);
+    // Append one evaluate round trip, marked so a result is not mistaken for
+    // program output.
+    void appendEvaluation(const QString& expression, const QString& result, bool ok);
     // Clear the output console.
     void clearOutput();
+
+    // Replace the call stack. `selectedId` is the frame to highlight; the row
+    // index and the frame id are the same number (constraint 11), but they are
+    // passed separately so this does not silently depend on that.
+    void setFrames(const QVector<DebugSession::Frame>& frames, int selectedId);
+    // Replace the variables pane.
+    void setVariables(const QVector<DebugSession::Variable>& vars);
+
+    // Replace the breakpoints panel — a view over the model, never the model
+    // itself. `collidingBasenames` are basenames that appear more than once
+    // among the open buffers: `tur dap` matches breakpoints by basename
+    // (constraint 5), so those breakpoints silently apply to both files, and a
+    // warning row says so. Silently wrong is much worse than loudly limited.
+    void setBreakpoints(const QVector<BreakpointModel::Breakpoint>& bps,
+                        const QStringList& collidingBasenames);
 
     // Enable/disable the toolbar buttons from the session state machine:
     // everything except Stop is disabled unless Paused.
     void setPaused(bool paused);
     void setRunning(bool running);
+
+    // Show or hide the reverse-execution buttons. They mean nothing in a live
+    // session — the adapter only serves them from a recording — so they are
+    // hidden rather than disabled, which would imply they might light up.
+    void setReverseAvailable(bool available);
+
+    // Turn the evaluate line on or off. `whyNot` becomes its placeholder when
+    // disabled, so the reason is where the box is rather than in a per-keystroke
+    // error (the replay case: "there is no live frame").
+    void setEvaluateEnabled(bool enabled, const QString& whyNot = {});
 
 signals:
     // Toolbar actions. MainWindow connects these to the live DebugSession.
@@ -33,10 +71,44 @@ signals:
     void stepInRequested();
     void stepOutRequested();
     void stopRequested();
+    // Reverse execution, served from a recording (T3).
+    void stepBackRequested();
+    void reverseStepOverRequested();
+    void reverseContinueRequested();
+
+    // A row in the call stack was picked. Carries the frame id.
+    void frameSelected(int frameId);
+    // The user submitted an expression on the evaluate line.
+    void evaluateRequested(const QString& expression);
+
+    // Breakpoints panel. The panel reports intent; the owner edits the model,
+    // and the model's `changed` brings the new state back here. The panel
+    // never writes to the model directly — that is what keeps it a view.
+    void breakpointEnableToggled(const QString& path, int line, bool enabled);
+    void breakpointConditionEdited(const QString& path, int line, const QString& condition);
+    void breakpointActivated(const QString& path, int line);
+    void breakpointRemoved(const QString& path, int line);
 
 private:
     QToolBar* toolbar_;
+    QSplitter* panes_;
+    QListWidget* stack_;
+    QTreeWidget* variables_;
+    QTreeWidget* breakpoints_;
+    // Set while setBreakpoints is rebuilding the panel, so the check-state and
+    // edit handlers can tell a programmatic change from a user's click.
+    bool rebuildingBreakpoints_ = false;
     QPlainTextEdit* console_;
+    QLineEdit* evalInput_;
+    // Actions kept by hand rather than read back off the toolbar by index:
+    // the index arithmetic that `setPaused` used to do broke the moment the
+    // reverse buttons made the toolbar's length conditional.
+    QVector<QAction*> stepActions_;
+    QVector<QAction*> reverseActions_;
+    QAction* stopAction_ = nullptr;
+    // Whether this session can evaluate at all, independent of whether it is
+    // paused right now. False in a recording: there is no live frame.
+    bool evaluateAllowed_ = true;
 };
 
 }

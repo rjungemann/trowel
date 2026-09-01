@@ -56,6 +56,12 @@ public:
     void setEnabled(const QString& path, int line, bool enabled);
     void setCondition(const QString& path, int line, const QString& condition);
 
+    // Apply a batch of {old line → new line} moves reported by the editor
+    // after an edit. A new line of 0 removes the breakpoint (its line was
+    // deleted). Applied against a snapshot, because moves overlap — see the
+    // implementation. Emits `changed(path)` once.
+    void applyLineMoves(const QString& path, const QVector<QPair<int, int>>& moves);
+
     // True if two open sources share a basename — they collide inside the
     // interpreter, which matches breakpoints by basename (constraint 5). The
     // caller passes the set of open paths; this reports whether `path`'s

@@ -243,8 +243,10 @@ void TabBar::paintEvent(QPaintEvent*) {
             ? closable_[i] : true;
         const int closeSlot = closable ? kCloseSlot : 0;
 
-        // Label: centered in the text area (excluding close slot when present).
-        QRect textRect = g.rect.adjusted(kHPad, 0, -closeSlot, -2);
+        // Label: centered in the text area. A closable tab's right inset is the
+        // close slot; a non-closable one insets by kHPad instead, so its label
+        // keeps the same padding on both sides rather than hugging the divider.
+        QRect textRect = g.rect.adjusted(kHPad, 0, -(closable ? closeSlot : kHPad), -2);
         QFont f = font();
         f.setBold(true);
         p.setFont(f);

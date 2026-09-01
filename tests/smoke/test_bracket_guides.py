@@ -236,3 +236,65 @@ def test_vertical_guide_clears_at_the_top_level(trowel, fixture_files: Path):
 
     trowel.call("editor.set_cursor", {"pos": _offset_of(trowel, "(def single")})
     assert _vertical(trowel)["visible"] is False
+
+
+# --- the gutter bar --------------------------------------------------------
+
+
+def _gutter(trowel) -> dict:
+    return _guide(trowel)["bracket_guide_gutter"]
+
+
+def test_gutter_bar_covers_a_multi_line_pair(trowel, fixture_files: Path):
+    """A rule at the margin edge marking every line the expression occupies.
+
+    Distinct from the spine: the spine sits in the opener's column, which the
+    eye has to find first. This one is at a fixed x, so "which lines am I in"
+    is answerable from the edge of the window.
+    """
+    _open(trowel, fixture_files / "brackets.tur")
+    _caret_at(trowel, "(+ doubled", extra=3)
+
+    bar = _gutter(trowel)
+    assert bar["visible"] is True
+    assert bar["bottom"] > bar["top"]
+    # In the gutter, not in the text: strictly left of the spine, which sits in
+    # the opener's own column. That is the invariant, and unlike a pixel
+    # constant it survives a margin-width change.
+    assert 0 <= bar["x"] < _vertical(trowel)["x"]
+
+
+def test_gutter_bar_is_drawn_for_a_single_line_pair_too(trowel, fixture_files: Path):
+    """Unlike the spine, one row is a valid answer.
+
+    The bar marks the rows the expression occupies rather than the distance
+    between its brackets, so a form on one line still gets one row of bar.
+    """
+    _open(trowel, fixture_files / "brackets.tur")
+    _caret_at(trowel, "(+ 1 2)", extra=3)
+
+    assert _vertical(trowel)["visible"] is False, "the spine has no extent here"
+    bar = _gutter(trowel)
+    assert bar["visible"] is True
+    assert bar["bottom"] > bar["top"]
+
+
+def test_gutter_bar_grows_with_the_enclosing_form(trowel, fixture_files: Path):
+    """The two-line form's bar is taller than the one-line form's."""
+    _open(trowel, fixture_files / "brackets.tur")
+
+    _caret_at(trowel, "(+ 1 2)", extra=3)
+    one_line = _gutter(trowel)
+    _caret_at(trowel, "(+ doubled", extra=3)
+    two_line = _gutter(trowel)
+
+    assert (two_line["bottom"] - two_line["top"]) > (one_line["bottom"] - one_line["top"])
+
+
+def test_gutter_bar_clears_at_the_top_level(trowel, fixture_files: Path):
+    _open(trowel, fixture_files / "brackets.tur")
+    _caret_at(trowel, "(+ doubled", extra=3)
+    assert _gutter(trowel)["visible"] is True
+
+    trowel.call("editor.set_cursor", {"pos": _offset_of(trowel, "(def single")})
+    assert _gutter(trowel)["visible"] is False

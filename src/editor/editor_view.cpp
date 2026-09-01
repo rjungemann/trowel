@@ -21,8 +21,16 @@
 
 namespace trowel {
 
-// One vertical line, painted over the viewport. No Q_OBJECT: it has no signals
-// or slots, so it needs no moc and can live entirely in this file.
+// The two vertical parts of the bracket-pair guide, painted over the viewport.
+// No Q_OBJECT: it has no signals or slots, so it needs no moc and can live
+// entirely in this file.
+//
+// The *spine* is a hairline in the opener's own column, spanning the rows the
+// form covers. The *gutter bar* is a thicker rule at the right edge of the
+// margins, spanning the same rows — it answers "which lines is the caret's
+// expression in?" from the edge of the window, where the eye can find it
+// without first locating the opener. They carry the same colour because they
+// describe the same pair.
 class BracketGuideOverlay : public QWidget {
 public:
     explicit BracketGuideOverlay(QWidget* parent) : QWidget(parent) {
@@ -39,28 +47,52 @@ public:
         top_ = top;
         bottom_ = bottom;
         color_ = color;
-        show();
-        update();
+        syncVisible();
     }
 
     void clearLine() {
         x_ = -1;
-        hide();
+        syncVisible();
+    }
+
+    void setGutterBar(const QRect& rect, const QColor& color) {
+        gutter_ = rect;
+        gutterColor_ = color;
+        syncVisible();
+    }
+
+    void clearGutterBar() {
+        gutter_ = QRect();
+        syncVisible();
     }
 
 protected:
     void paintEvent(QPaintEvent*) override {
-        if (x_ < 0 || bottom_ <= top_) return;
         QPainter painter(this);
-        painter.setPen(QPen(color_, 1));
-        painter.drawLine(x_, top_, x_, bottom_);
+        if (!gutter_.isEmpty()) {
+            painter.fillRect(gutter_, gutterColor_);
+        }
+        if (x_ >= 0 && bottom_ > top_) {
+            painter.setPen(QPen(color_, 1));
+            painter.drawLine(x_, top_, x_, bottom_);
+        }
     }
 
 private:
+    // Hidden only when neither part has anything to draw, so clearing one does
+    // not take the other down with it.
+    void syncVisible() {
+        const bool anything = (x_ >= 0 && bottom_ > top_) || !gutter_.isEmpty();
+        setVisible(anything);
+        if (anything) update();
+    }
+
     int x_ = -1;
     int top_ = 0;
     int bottom_ = 0;
     QColor color_;
+    QRect gutter_;
+    QColor gutterColor_;
 };
 
 namespace {
@@ -116,6 +148,11 @@ bool IsCodeStyle(int style) {
 // the didChange debounce rather than inventing a second cadence, and it is the
 // reason arrow-key navigation does not flood a single-threaded server.
 constexpr int kOccurrenceDebounceMs = 250;
+
+// Thickness of the gutter bar marking the caret expression's line range. Wider
+// than the 1px spine on purpose: it is read peripherally, at the edge of the
+// text, and a hairline there disappears against the margin's own divider.
+constexpr int kGutterBarWidth = 2;
 }
 
 EditorView::EditorView(QWidget* parent)
@@ -154,6 +191,10 @@ EditorView::EditorView(QWidget* parent)
         // An edit moves the brackets around the caret, so the guide has to be
         // recomputed even when the caret itself did not move.
         updateBracketGuide();
+        // Scintilla has already moved the breakpoint markers by the time this
+        // fires; this is where the model is told, so a breakpoint set on a
+        // line that has since slid down still means the same statement.
+        reconcileBreakpointLines();
         emit contentChanged(docVersion_);
     });
 
@@ -602,15 +643,49 @@ void EditorView::setBreakpointMarkers(const QVector<BreakpointMark>& marks) {
     // Clear only the breakpoint markers, leaving diagnostics untouched.
     sci_->markerDeleteAll(dbg::kBreakpointMarker);
     sci_->markerDeleteAll(dbg::kBreakpointDisabledMarker);
+    bpHandles_.clear();
     for (const BreakpointMark& m : marks) {
         if (m.line < 1) continue;
         const int line0 = m.line - 1;
         // Pending (not yet verified) and disabled both render hollow — the
         // delay is visible rather than mysterious (constraint 6).
         const bool hollow = !m.enabled || m.pending;
-        sci_->markerAdd(line0, hollow ? dbg::kBreakpointDisabledMarker
-                                      : dbg::kBreakpointMarker);
+        // `markerAdd` returns a handle Scintilla carries across insertions and
+        // deletions. Keeping the handle beside the line is what makes a
+        // breakpoint follow its statement when a line is inserted above it;
+        // storing a bare line number and hoping is the classic bug.
+        const int handle = static_cast<int>(
+            sci_->markerAdd(line0, hollow ? dbg::kBreakpointDisabledMarker
+                                          : dbg::kBreakpointMarker));
+        if (handle < 0) continue;  // Scintilla refused (out of range)
+        bpHandles_.append({handle, m.line});
     }
+}
+
+void EditorView::reconcileBreakpointLines() {
+    if (bpHandles_.isEmpty()) return;
+    QVector<QPair<int, int>> moves;
+    for (BreakpointHandle& h : bpHandles_) {
+        const int now = static_cast<int>(sci_->markerLineFromHandle(h.handle));
+        // -1 means Scintilla no longer knows this handle.
+        //
+        // Measured, because the intuition is wrong: deleting the line a marker
+        // sits on does *not* produce -1. Scintilla merges the removed line's
+        // markers onto the line that takes its place, so a breakpoint on a
+        // deleted line lands on the next statement rather than vanishing. That
+        // is Scintilla's rule, it is a reasonable one, and it is left alone —
+        // this branch covers only a handle genuinely dropped underneath us.
+        if (now < 0) {
+            moves.append({h.line, 0});
+            h.line = 0;
+            continue;
+        }
+        if (now + 1 != h.line) {
+            moves.append({h.line, now + 1});
+            h.line = now + 1;
+        }
+    }
+    if (!moves.isEmpty()) emit breakpointLinesMoved(moves);
 }
 
 void EditorView::setExecutionLine(int line, bool isTopFrame) {
@@ -795,7 +870,12 @@ std::pair<int, int> EditorView::enclosingBracketPair(int pos) const {
 void EditorView::clearBracketGuide() {
     bracketGuideSpan_ = {-1, -1};
     guideOpener_ = guideCloser_ = -1;
-    if (guideOverlay_) guideOverlay_->clearLine();
+    guideLine_ = GuideLine{};
+    gutterBar_ = GuideLine{};
+    if (guideOverlay_) {
+        guideOverlay_->clearLine();
+        guideOverlay_->clearGutterBar();
+    }
     sci_->setIndicatorCurrent(bracketguide::kIndicator);
     sci_->indicatorClearRange(0, sci_->textLength());
 }
@@ -803,15 +883,65 @@ void EditorView::clearBracketGuide() {
 void EditorView::repositionBracketGuideOverlay() {
     if (!guideOverlay_) return;
     guideLine_ = GuideLine{};
-    if (guideOpener_ < 0 || guideCloser_ < 0) { guideOverlay_->clearLine(); return; }
+    gutterBar_ = GuideLine{};
+    if (guideOpener_ < 0 || guideCloser_ < 0) {
+        guideOverlay_->clearLine();
+        guideOverlay_->clearGutterBar();
+        return;
+    }
 
     const int openerLine = static_cast<int>(sci_->lineFromPosition(guideOpener_));
     const int closerLine = static_cast<int>(sci_->lineFromPosition(guideCloser_));
-    // A single-line pair has no vertical extent; the horizontal segment already
-    // says everything there is to say about it.
-    if (openerLine == closerLine) { guideOverlay_->clearLine(); return; }
 
     guideOverlay_->setGeometry(sci_->viewport()->rect());
+
+    const int styleForColor =
+        rainbow_ ? styleAt(guideCloser_) : static_cast<int>(STYLE_INDENTGUIDE);
+    const sptr_t bgr = sci_->styleFore(styleForColor);
+    // Scintilla stores colours as 0xBBGGRR, the reverse of QColor's argument
+    // order, so the channels are unpacked rather than cast.
+    const QColor color(static_cast<int>(bgr & 0xFF),
+                       static_cast<int>((bgr >> 8) & 0xFF),
+                       static_cast<int>((bgr >> 16) & 0xFF));
+
+    // The gutter bar covers the lines the expression *occupies*, closer's line
+    // included — it is a row range, not a span between two points, so it ends
+    // at the bottom of the closer's line rather than at its top. A single-line
+    // pair therefore still gets one row of bar, which is the whole point: it is
+    // the one decoration that says which lines without needing an extent.
+    const int barTop = static_cast<int>(sci_->pointYFromPosition(
+        static_cast<int>(sci_->positionFromLine(openerLine))));
+    const int barBottom = static_cast<int>(sci_->pointYFromPosition(
+        static_cast<int>(sci_->positionFromLine(closerLine))))
+        + static_cast<int>(sci_->textHeight(closerLine));
+    // Right-aligned against the last margin, so it sits on the gutter/text
+    // boundary and reads as an edge marker rather than as another indent guide.
+    int marginsWidth = 0;
+    for (int m = 0; m <= SC_MAX_MARGIN; ++m) {
+        marginsWidth += static_cast<int>(sci_->marginWidthN(m));
+    }
+    const int barX = qMax(0, marginsWidth - kGutterBarWidth);
+    // Clipped to the viewport: a form taller than the window would otherwise
+    // hand Qt a rect reaching far past either edge.
+    const int clippedTop = qMax(0, barTop);
+    const int clippedBottom = qMin(sci_->viewport()->height(), barBottom);
+    if (clippedBottom > clippedTop) {
+        guideOverlay_->setGutterBar(
+            QRect(barX, clippedTop, kGutterBarWidth, clippedBottom - clippedTop),
+            color);
+        gutterBar_ = GuideLine{true, barX, clippedTop, clippedBottom};
+    } else {
+        guideOverlay_->clearGutterBar();
+    }
+
+    // The spine, in the opener's own column. A single-line pair has no vertical
+    // extent; the horizontal segment already says everything there is to say
+    // about it.
+    if (openerLine == closerLine) {
+        guideOverlay_->clearLine();
+        guideOverlay_->raise();
+        return;
+    }
 
     const int x = static_cast<int>(sci_->pointXFromPosition(guideOpener_));
     // From the top of the opener's line to the top of the closer's, which is
@@ -823,16 +953,12 @@ void EditorView::repositionBracketGuideOverlay() {
     // zero height and vanishes exactly where it is most wanted.
     const int top = static_cast<int>(sci_->pointYFromPosition(guideOpener_));
     const int bottom = static_cast<int>(sci_->pointYFromPosition(guideCloser_));
-    if (bottom <= top) { guideOverlay_->clearLine(); return; }
+    if (bottom <= top) {
+        guideOverlay_->clearLine();
+        guideOverlay_->raise();
+        return;
+    }
 
-    const int styleForColor =
-        rainbow_ ? styleAt(guideCloser_) : static_cast<int>(STYLE_INDENTGUIDE);
-    const sptr_t bgr = sci_->styleFore(styleForColor);
-    // Scintilla stores colours as 0xBBGGRR, the reverse of QColor's argument
-    // order, so the channels are unpacked rather than cast.
-    const QColor color(static_cast<int>(bgr & 0xFF),
-                       static_cast<int>((bgr >> 8) & 0xFF),
-                       static_cast<int>((bgr >> 16) & 0xFF));
     guideOverlay_->setLine(x, top, bottom, color);
     guideOverlay_->raise();
     guideLine_ = GuideLine{true, x, top, bottom};

@@ -42,6 +42,10 @@ Trowel decides where a file opens.
 | `Ctrl+Shift+K` | Clear REPL output |
 | `Ctrl+Shift+F` | Format file (`tur format`) |
 | `Ctrl+Shift+T` | Trace buffer (record an execution trace with `tur trace`) |
+| `F5` | Debug buffer (run the file under the interpreter debugger, `tur dap`) |
+| `Ctrl+F5` | Time-travel debug (record the run, then step it in both directions) |
+| `Ctrl+Shift+F5` | Restart the debug session (a respawn — one program per session) |
+| `F9` | Toggle a breakpoint on the caret's line (or click the gutter) |
 | `Ctrl+E` | Focus editor |
 | `Ctrl+T` | Focus REPL |
 | ``Ctrl+` `` | Toggle focus between editor and REPL |

@@ -680,10 +680,15 @@ papered over:
 |---|---|---|
 | **T1** | A **"Trace"** action beside "Run Buffer" that shells out to `tur trace`, writes to a temp `.turtrace`, and prints the summary line into the REPL pane. No timeline. | A traced fixture reports a plausible step count; the three §5.3 cases each produce a *specific* message, not an empty panel |
 | **T2** | `debugger-support.md` phases 1–3 (transport, launch, breakpoints, stack, variables) — **not this plan's work**, listed for ordering | Its own gates |
-| **T3** | `"replay": true` launch; wire `stepBack` / `reverseContinue` / `reverseNext` to controls; the gutter follows the cursor | Stepping backward into a returned frame shows that frame's values |
-| **T4** | The timeline strip: a slider over `[0, steps)`, first / step-back / step-forward / last, `file:line` for the cursor. Coalesce seeks — a drag issues one seek at a time and remembers only the most recent target | Scrubbing a recursive fixture end to end moves the gutter monotonically and never exceeds peak depth |
-| **T5** | Console replay: the REPL pane shows what the program had printed by the cursor's step, and puts the user's own transcript back on close | Scrubbing backwards rewinds the transcript |
-| **T6** | A **call-depth ribbon** under the slider (§5.6) | Recursion shape is visible at a glance and the ribbon never disagrees with the frame count |
+| **T3** — **built** | `"replay": true` launch; wire `stepBack` / `reverseContinue` / `reverseNext` to controls; the gutter follows the cursor | Stepping backward into a returned frame shows that frame's values |
+| **T4** — **blocked**, §5.5.1–2 | The timeline strip: a slider over `[0, steps)`, first / step-back / step-forward / last, `file:line` for the cursor. Coalesce seeks — a drag issues one seek at a time and remembers only the most recent target | Scrubbing a recursive fixture end to end moves the gutter monotonically and never exceeds peak depth |
+| **T5** — **blocked**, §5.5.1–2 | Console replay: the REPL pane shows what the program had printed by the cursor's step, and puts the user's own transcript back on close | Scrubbing backwards rewinds the transcript |
+| **T6** — **blocked**, §5.6 and §5.5.1–2 | A **call-depth ribbon** under the slider (§5.6) | Recursion shape is visible at a glance and the ribbon never disagrees with the frame count |
+
+**Read [§5.5.2](#552-the-precedent--what-try-turmeric-actually-does) before
+starting any of T4–T6.** Try Turmeric has already built this once; the seek
+loop, the coalescing, the ribbon's data source and the last-step output case
+are all settled there.
 
 T1 is worth shipping alone: it is an afternoon, it costs nothing to throw away,
 and it is what answers §5.3's three questions with real fixtures before any UI
@@ -714,6 +719,201 @@ on how the user punctuates their source. T3–T6 are gated on **T2 alone** —
 `debugger-support.md` phases 1–3 — exactly as this plan originally sequenced
 them, and for the original reason: replay is that same client with three extra
 requests and a different `launch` argument.
+
+### 5.5.1 T3 built; T4–T6 measured and blocked upstream
+
+> **T3 has shipped.** `launch` with `"replay": true`, the reverse-execution
+> controls, and the gutter following the cursor. **T4, T5 and T6 cannot be
+> built over DAP as it stands** — established by driving the staged `v0.42.1`
+> binary, not by reading the source. What each needs upstream is below.
+
+The transcript that settles it, against
+`build/macos-release/trowel.app/Contents/Resources/turmeric/tur`:
+
+```
+CAPS: {"supportsConditionalBreakpoints":true, "supportsConfigurationDoneRequest":true,
+       "supportsEvaluateForHovers":true, "supportsReverseContinue":true,
+       "supportsStepBack":true, "supportsTerminateRequest":true}
+FRAMES (entry):     main  trace_loop.tur:3
+AFTER 3x stepIn:    main  trace_loop.tur:6
+AFTER stepBack:     main  trace_loop.tur:5
+VARS:               [{"name":"i","value":"0","variablesReference":0}]
+EVALUATE:  false  "cannot evaluate in a recording -- relaunch without \"replay\""
+GOTO:      false  "not supported in a recording"
+GOTOTARGETS: false "not supported in a recording"
+SEEK:      false  "not supported in a recording"
+REVERSENEXT: true
+```
+
+`dap_replay_session` in `../turmeric/src/turi/dap.c` handles exactly
+`continue`, `reverseContinue`, `stepIn`, `stepBack`, `next`, `reverseNext`,
+`stepOut`, `pause`, `disconnect`/`terminate`, plus the common set
+(`stackTrace`, `scopes`, `variables`, `evaluate`, `setBreakpoints`). Everything
+else gets "not supported in a recording".
+
+**T4 — the timeline strip — needs two things DAP does not carry.**
+
+1. **A seek.** A slider over `[0, steps)` needs "put the cursor at step N".
+   There is no such request: `goto` and `gotoTargets` are both refused above.
+   `turi_trace_replay_seek` exists and is exactly right, but nothing exposes
+   it. Approximating a seek with repeated `stepBack` is precisely the trap the
+   tracing guide warns about — seeking once per candidate turns a scan of an
+   80k recording from 0.02 s into not finishing.
+2. **The step count.** `turi_trace_replay_steps` is internal. Without it the
+   slider has no range, and a slider whose maximum is a guess is worse than no
+   slider.
+
+**T5 — console replay — is blocked for a subtler reason.** `output` events are
+append-only: `dap_replay_flush_output` returns early whenever the transcript is
+no longer than what it has already sent, so a `stepBack` emits *nothing*. The
+client therefore cannot learn where to truncate, and T5's gate — "scrubbing
+backwards rewinds the transcript" — is unreachable from this end. This is not a
+Trowel bug to fix; the adapter would have to send a length or a replace.
+
+**T6 — the depth ribbon — is blocked as §5.6 already predicted**, and the spike
+confirms it: no `depth_at`, no custom request, nothing.
+
+**What would unblock all three**, in one small additive change upstream — a
+custom request in the replay loop, since that loop already has the cursor and
+the reader in hand:
+
+```
+replayInfo   → {"steps": N, "index": i, "depth": d}
+replaySeek   → {"index": N}                      (turi_trace_replay_seek)
+replayDepths → {"depths": [...]}  downsampled    (turi_trace_replay_depth_at)
+```
+
+plus either a `replaceOutput` event or a length on the existing `output` event
+so a backwards seek can rewind the transcript. `lsp-support.md` phase 2 is the
+precedent for the sequencing: land it upstream, cut a release, bump the pin.
+
+> **Superseded in part.** The sketch above is what the branch implements, and
+> §5.5.2 corrects two thirds of it against the implementation that already
+> exists: `replayDepths` should be a batched *sites* request (depth and
+> position together), and the final step's transcript needs the equivalent of
+> `turi_wasm_trace_output_full` rather than the fixture edit the branch
+> currently carries.
+
+> **Written, on an upstream branch.** `../turmeric` branch `dap-replay-seek`
+> (worktree `~/Projects/turmeric/dap-replay-seek`, commit `de6c340bc`) adds
+> exactly that, advertised as `supportsTurmericReplayTimeline`:
+>
+> | Request | Arguments | Body |
+> | --- | --- | --- |
+> | `replayInfo` | — | `{"steps", "index", "depth", "outputLength"}` |
+> | `replaySeek` | `{"index"}` | `{"index": actual}`, then a `stopped` event |
+> | `replaySites` | `{"indices"}` **or** `{"buckets"}` | `{"steps", "sites": [{"index","file","line","depth"}, …]}` |
+>
+> plus a **`replayOutput`** event carrying the whole transcript whenever a
+> backwards seek shortens it. `tests/run-dap.sh` covers it at 61 assertions, up
+> from 32; ctest 119/119.
+>
+> The first commit (`de6c340bc`) was derived without reading the implementation
+> that already exists and got two things wrong; `51e6b8ada` corrects both
+> against it. §5.5.2 records what the precedent shows and what changed.
+
+### 5.5.2 The precedent — what Try Turmeric actually does
+
+This should have come first. Try Turmeric is the working implementation of the
+timeline, this plan names it as the reference throughout (§5.4, §5.6), and
+§5.5.1 above was nevertheless derived from `dap.c` and a protocol spike alone.
+The cost was not abstract: it produced a design that diverges from the
+precedent in three places, and it rediscovered a bug upstream had already
+fixed — then worked around it in a test fixture.
+
+**Ground truth**, in `../turmeric`:
+
+| What | Where |
+| --- | --- |
+| The timeline UI and its seek loop | `web/main.js` §"T3: the time-travel timeline" (~5425–5860) |
+| The worker side of every trace call | `web/public/eval-worker.js`, `trace-run` / `trace-seek` / `trace-site-at` / `trace-find-line` |
+| The C exports those bridge to | `src/web/wasm_glue.c`, `turi_wasm_trace_*` |
+
+**The shape of it.** `traceSeek(index)` sends one `trace-seek` message; the
+worker calls `_turi_wasm_trace_seek` then `_turi_wasm_trace_state`, and that
+single call returns everything:
+
+```json
+{"index": i, "steps": n,
+ "frames": [{"fn":…, "file":…, "line":…, "col":…, "endCol":…, "locals":[…]}],
+ "output": "the whole transcript at the cursor"}
+```
+
+`traceRender` then replaces the console outright —
+`traceRenderOutput(state.output)`. **The browser console rewinds because every
+seek already carries the full transcript.** Rewinding was never implemented
+there; it is what falls out of returning whole state instead of deltas. That is
+the answer to "why was this hard for Trowel and free for the page": the page is
+in-process with the reader, and DAP is a push protocol whose output events are
+append-only deltas with no request meaning "what is the transcript now".
+
+Three corrections follow, all of them things §5.5.1 got wrong. **The first two
+are now fixed on the branch** (`51e6b8ada`); the third is accepted.
+
+1. ~~**The last-step output problem has a workaround where upstream has a
+   fix.**~~ **Fixed.** `_turi_wasm_trace_output_full()` (`wasm_glue.c:1116`)
+   walks the recording and concatenates *every* OUTPUT record, ignoring the
+   cursor; `traceSeek` asks for it when `target === steps - 1`, with the
+   comment: *"a program whose final act is a println drains it after the final
+   STEP"* and an empty console at the end of a run that printed *"reads as a
+   broken timeline rather than a precise one"*.
+
+   The branch hit exactly this — `replayInfo` reported `outputLength: 0` at step
+   24020 of 24021 — and had resolved it by **editing the fixture to print
+   earlier**, a test working around a product bug. `dap_replay_output_full` is
+   now that function for the DAP side, the fixture is back to its original
+   form, and the driver asserts the final `println` is visible: the test proves
+   the fix rather than dodging the bug.
+
+2. ~~**`replayDepths` is the wrong shape.**~~ **Fixed — it is `replaySites`
+   now.** The precedent's ribbon data source is `trace-site-at` over a **batch
+   of indices**, returning `{file, line, depth}` per index (`wasm_glue.c:1052`)
+   — depth *and* position together, in one round trip, explicitly documented as
+   "deliberately NOT a seek". T4 needs `file:line` for the cursor anyway and T6
+   needs depth, so one request serves both; a depths-only array would have made
+   a scrubber ask twice over the same steps.
+
+   `replaySites` takes `{"indices": [...]}` for specific steps or
+   `{"buckets": N}` for the whole recording downsampled. Max-per-bucket
+   survived as the right reduction, and a bucket now also reports the site of
+   the step where its maximum occurred — so clicking a ribbon spike lands where
+   the spike is.
+
+3. **A scrub tick costs one round trip in the browser and five over DAP.**
+   `trace_state` returns index, steps, frames *and* locals *and* output
+   together. The branch's flow is `replaySeek` → `stopped` → `stackTrace` →
+   `scopes` → `variables`, plus an output event. That is inherent to DAP —
+   clients expect the standard stop flow and Trowel's panes are already wired to
+   it — so it is a divergence to accept rather than fix. But it makes T4's
+   "coalesce seeks, remember only the most recent target" **load-bearing rather
+   than a nicety**, and it is worth knowing that `traceSeek`'s
+   `seekPending`/`seekQueued` pair is exactly that coalescing, already written.
+
+**One thing the precedent confirms rather than corrects:** Try Turmeric still
+has no depth ribbon. `trace-site-at` is plumbed through the worker and
+`main.js` handles the `trace-sites` reply, but nothing sends it — the comment
+naming "the depth ribbon" as its caller describes an anticipated one. §5.6 is
+right that T6 is unbuilt anywhere; it is now also clear what it should be built
+*on*.
+
+**Sequencing, unchanged and still upstream's:** (1) and (2) are fixed; what
+remains is merge, cut a release, bump `TROWEL_TURMERIC_VERSION`, and only then
+build T4–T6 against a pinned binary that ships the requests. Building against
+an unmerged branch would pin Trowel to a `tur` no user has.
+
+**When T4–T6 do start, the Trowel side already has the shapes it needs.**
+`DebugSession` should read `supportsTurmericReplayTimeline` off the
+`initialize` response rather than inferring it from the pin — `ResolveTurBinary()`
+honours a QSettings override and PATH, so the `tur` on the other end of the
+pipe is not necessarily the one `TROWEL_TURMERIC_VERSION` names — and the
+console rewind is `DebuggerView` gaining a `setOutput()` beside its
+`appendOutput()`, driven by a `replayOutput` → `outputReplaced` signal. Neither
+is written yet.
+
+**Until then T4–T6 are not started, deliberately.** The reverse-execution
+controls T3 shipped are the whole of the time-travel UI that this adapter can
+honestly serve, and a slider that cannot seek would be a lie in the shape of a
+widget.
 
 ### 5.6 T6 — the depth ribbon
 
@@ -880,6 +1080,27 @@ Recorded rather than silently absorbed, matching `lsp-navigation.md` §14.
    `BracketGuideOverlay` into its pass rather than stacking a second
    transparent widget over the same viewport — the note is on the forward
    declaration in `editor_view.h` so whoever builds the minimap trips over it.
+
+10. **G2 grew a third part the plan did not ask for: a gutter bar.** §4.4
+    designed one vertical element, the spine in the opener's own column. In
+    use that turned out to answer the wrong question — the spine tells you
+    *how deep* the form is indented, and finding it means first finding the
+    opener. A 2px rule right-aligned against the margins, spanning the same
+    rows in the same depth colour, answers "which lines is my expression in?"
+    from a fixed x at the edge of the window. Try Turmeric draws exactly this,
+    which is where the shape comes from.
+
+    Two consequences worth knowing. It is **drawn for single-line pairs**,
+    where the spine is deliberately not: the bar marks the rows a form
+    occupies, and one row is a valid answer, whereas a spine between two points
+    on the same row has zero length. And it is **clipped to the viewport**,
+    because a form taller than the window would otherwise hand Qt a rect
+    reaching past both edges — the spine got away without this by being a
+    `drawLine`, which Qt clips itself.
+
+    Read back through `lsp.decorations` as `bracket_guide_gutter`, the same
+    shape as `bracket_guide_vertical`, so the tests assert on the painted rect
+    rather than on the pair that produced it.
 
 ### Track T
 

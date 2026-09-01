@@ -52,6 +52,8 @@
 #include <QVBoxLayout>
 #include <QWidget>
 
+#include <algorithm>
+
 namespace trowel {
 
 namespace {
@@ -289,8 +291,32 @@ void MainWindow::setupMenus() {
     debugAction_->setShortcut(QKeySequence("F5"));
     debugAction_->setToolTip(
         "Run the current file under the interpreter debugger (`tur dap`)");
-    connect(debugAction_, &QAction::triggered, this, &MainWindow::debugBuffer);
+    connect(debugAction_, &QAction::triggered, this, &MainWindow::debugOrContinue);
     runMenu->addAction(debugAction_);
+
+    replayAction_ = new QAction("Time-Travel Debu&g", this);
+    replayAction_->setShortcut(QKeySequence("Ctrl+F5"));
+    replayAction_->setToolTip(
+        "Record the run, then step through it in both directions "
+        "(`tur dap` with a recording)");
+    connect(replayAction_, &QAction::triggered, this, &MainWindow::replayBuffer);
+    runMenu->addAction(replayAction_);
+
+    restartDebugAction_ = new QAction("Restart Debug S&ession", this);
+    restartDebugAction_->setShortcut(QKeySequence("Ctrl+Shift+F5"));
+    restartDebugAction_->setToolTip(
+        "Respawn the debug session — `tur dap` runs one program per session, "
+        "so a restart is a fresh process");
+    connect(restartDebugAction_, &QAction::triggered, this, &MainWindow::restartDebug);
+    runMenu->addAction(restartDebugAction_);
+
+    toggleBreakpointAction_ = new QAction("Toggle &Breakpoint", this);
+    toggleBreakpointAction_->setShortcut(QKeySequence("F9"));
+    toggleBreakpointAction_->setToolTip(
+        "Set or clear a breakpoint on the caret's line (or click the gutter)");
+    connect(toggleBreakpointAction_, &QAction::triggered,
+            this, &MainWindow::toggleBreakpointAtCaret);
+    runMenu->addAction(toggleBreakpointAction_);
 
     runMenu->addSeparator();
 
@@ -631,21 +657,89 @@ void MainWindow::refreshBreakpointMarkers(const QString& path) {
         }
         ed->setBreakpointMarkers(marks);
     }
+    refreshBreakpointPanel();
+}
+
+void MainWindow::refreshBreakpointPanel() {
+    if (!breakpoints_ || !replPane_ || !replPane_->debugger()) return;
+
+    // `tur dap` reduces a breakpoint's path to its basename before binding it
+    // (constraint 5), so two open files with the same name share one
+    // breakpoint set inside the interpreter. Detected here and surfaced as a
+    // warning row: silently wrong is much worse than loudly limited.
+    QStringList openPaths;
+    for (const auto& b : buffers_) {
+        if (b->view && b->view->kind() == TabContent::Kind::Editor &&
+            !b->view->filePath().isEmpty()) {
+            openPaths << b->view->filePath();
+        }
+    }
+    QStringList colliding;
+    for (const auto& bp : breakpoints_->breakpoints()) {
+        if (!BreakpointModel::HasBasenameCollision(bp.path, openPaths)) continue;
+        const QString name = QFileInfo(bp.path).fileName();
+        if (!colliding.contains(name)) colliding << name;
+    }
+    replPane_->debugger()->setBreakpoints(breakpoints_->breakpoints(), colliding);
+}
+
+void MainWindow::clearExecutionLines() {
+    for (const auto& b : buffers_) {
+        if (b->view && b->view->kind() == TabContent::Kind::Editor) {
+            static_cast<EditorView*>(b->view)->clearExecutionLine();
+        }
+    }
+}
+
+void MainWindow::showSelectedFrame(int frameId) {
+    if (!debug_) return;
+    const QVector<DebugSession::Frame>& frames = debug_->frames();
+    const auto it = std::find_if(frames.cbegin(), frames.cend(),
+                                 [frameId](const DebugSession::Frame& f) {
+                                     return f.id == frameId;
+                                 });
+    if (it == frames.cend() || it->filePath.isEmpty()) return;
+
+    // Clear everywhere first: the previous frame may well have been in a
+    // different buffer, and a marker left behind in one says the program is
+    // stopped in two places at once.
+    clearExecutionLines();
+
+    int idx = indexOfPath(it->filePath);
+    if (idx < 0) {
+        // Open it. A stack that names a file you cannot see is a stack you
+        // cannot follow, and the frames the debugger hands back are all real
+        // paths on disk (`dap.c` emits `source.path` in full).
+        if (!QFileInfo::exists(it->filePath)) return;
+        if (!openPath(it->filePath)) return;
+        idx = indexOfPath(it->filePath);
+        if (idx < 0) return;
+    }
+    if (idx != activeIndex_) activateBuffer(idx);
+    EditorView* ed = editorView();
+    if (!ed) return;
+    // Frame 0 is where the program actually is; anything else is a frame the
+    // user is *looking at*, and gets the hollow arrow instead.
+    const bool isTop = !frames.isEmpty() && frames.first().id == frameId;
+    ed->setExecutionLine(it->line, isTop);
 }
 
 void MainWindow::pushBreakpointsToSession() {
     if (!debug_ || !breakpoints_) return;
-    EditorView* v = editorView();
-    if (!v || v->filePath().isEmpty()) return;
+    // The *debugged program's* file, not whatever buffer happens to be in
+    // front. Switching tabs while paused must not silently re-point the
+    // session's breakpoint set at a different file.
+    const QString program = debug_->program();
+    if (program.isEmpty()) return;
     QVector<DebugSession::BreakpointSpec> bps;
-    for (const auto& bp : breakpoints_->forFile(v->filePath())) {
+    for (const auto& bp : breakpoints_->forFile(program)) {
         DebugSession::BreakpointSpec s;
         s.line = bp.line;
         s.enabled = bp.enabled;
         s.condition = bp.condition;
         bps.append(s);
     }
-    debug_->setBreakpoints(v->filePath(), bps);
+    debug_->setBreakpoints(program, bps);
 }
 
 void MainWindow::connectBufferSignals(int index) {
@@ -698,6 +792,20 @@ void MainWindow::connectBufferSignals(int index) {
         const QString path = editor->filePath();
         if (path.isEmpty()) return;  // untitled buffers can't bind breakpoints
         breakpoints_->toggle(path, line);
+        // A toggle made while paused can be delivered now; mid-run it cannot
+        // be (constraint 6) and waits for the next stop.
+        if (debug_ && debug_->state() == DebugSession::State::Paused) {
+            pushBreakpointsToSession();
+        }
+    });
+    // Scintilla carries markers across edits; the model is told here so a
+    // breakpoint set on a line that has since slid down still means the same
+    // statement. Without this the model keeps a bare line number and the
+    // marker and the breakpoint quietly disagree.
+    connect(editor, &EditorView::breakpointLinesMoved, this,
+            [this, editor](const QVector<QPair<int, int>>& moves) {
+        if (!breakpoints_ || editor->filePath().isEmpty()) return;
+        breakpoints_->applyLineMoves(editor->filePath(), moves);
     });
     // EditorView connects to this signal in its own constructor, so by the time
     // this runs the view has already repainted its indicators.
@@ -1030,6 +1138,24 @@ void MainWindow::updateEditorActionsEnabled() {
             mode == EvalMode::Buffer
                 ? QStringLiteral("Run the current file under the interpreter debugger (`tur dap`)")
                 : QStringLiteral("Debugging is only available for Turmeric files"));
+    }
+    if (replayAction_) {
+        replayAction_->setEnabled(mode == EvalMode::Buffer);
+        replayAction_->setToolTip(
+            mode == EvalMode::Buffer
+                ? QStringLiteral("Record the run, then step through it in both "
+                                 "directions (`tur dap` with a recording)")
+                : QStringLiteral("Time-travel debugging is only available for "
+                                 "Turmeric files"));
+    }
+    if (toggleBreakpointAction_) {
+        // Gated on the same thing as Debug Buffer — a breakpoint in a file the
+        // debugger will never load is a decoration, not a breakpoint.
+        toggleBreakpointAction_->setEnabled(mode == EvalMode::Buffer);
+        toggleBreakpointAction_->setToolTip(
+            mode == EvalMode::Buffer
+                ? QStringLiteral("Set or clear a breakpoint on the caret's line (or click the gutter)")
+                : QStringLiteral("Breakpoints are only available for Turmeric files"));
     }
 
     // Trowel highlights nine languages and has a language server for one. F12
@@ -1389,7 +1515,101 @@ void MainWindow::runSelection() {
     if (!r.ok) statusBar()->showMessage(r.message, 4000);
 }
 
-void MainWindow::debugBuffer() {
+void MainWindow::toggleBreakpointAtCaret() {
+    EditorView* v = editorView();
+    if (!v || !breakpoints_) return;
+    const QString path = v->filePath();
+    // A breakpoint is keyed by path, and an untitled buffer has none. Say so
+    // rather than silently dropping the toggle.
+    if (path.isEmpty()) {
+        statusBar()->show();
+        statusBar()->showMessage("Save the file before setting a breakpoint.", 4000);
+        return;
+    }
+    const auto [line0, col] = v->lineColFromPos(v->cursorPos());
+    Q_UNUSED(col);
+    const int line = line0 + 1;  // the model and DAP are both 1-based
+
+    // Read the before-state rather than the after: `toggle` reports whether the
+    // set changed, not which way it went, and the message has to name the
+    // direction.
+    const QVector<BreakpointModel::Breakpoint> before = breakpoints_->forFile(path);
+    const bool wasSet = std::any_of(
+        before.cbegin(), before.cend(),
+        [line](const BreakpointModel::Breakpoint& b) { return b.line == line; });
+    breakpoints_->toggle(path, line);
+
+    // A live session only reads stdin while paused (constraint 6), so a toggle
+    // made mid-run cannot be delivered until the next stop — but one made while
+    // already paused can, and should be, or stepping past the new line would
+    // sail right through it.
+    if (debug_ && debug_->state() == DebugSession::State::Paused) {
+        pushBreakpointsToSession();
+    }
+
+    statusBar()->show();
+    statusBar()->showMessage(
+        QStringLiteral("%1 breakpoint at %2:%3")
+            .arg(wasSet ? QStringLiteral("Cleared") : QStringLiteral("Set"),
+                 QFileInfo(path).fileName())
+            .arg(line),
+        3000);
+}
+
+void MainWindow::debugOrContinue() {
+    // F5 means Continue while a session is paused and Start otherwise — the
+    // convention every debugger uses, and the reason the Debugger tab's
+    // Continue button carries no shortcut of its own.
+    if (debug_ && debug_->state() == DebugSession::State::Paused) {
+        debug_->resume();
+        return;
+    }
+    startDebugSession(/*replay=*/false);
+}
+
+void MainWindow::debugBuffer() { startDebugSession(/*replay=*/false); }
+
+void MainWindow::replayBuffer() {
+    // Always stop on entry. A replay launch without it seeks straight to the
+    // first breakpoint and, finding none, ends the session — the adapter
+    // reports `exited` for a recording it never showed anyone, which reads as
+    // a broken feature rather than as "you set no breakpoints". Landing at
+    // step 0 is also what the action is for: scrubbing from the start.
+    debugStopOnEntry_ = true;
+    startDebugSession(/*replay=*/true);
+}
+
+void MainWindow::restartDebug() {
+    // `tur dap` runs one program per session (constraint 3) and has no
+    // `restart` request, so this is a respawn, not a rewind. The buffer and
+    // the mode are taken from the session being replaced so a restart means
+    // "the same thing again" — including replay, where re-recording is the
+    // only way to get back to step 0.
+    if (!debug_) {
+        statusBar()->show();
+        statusBar()->showMessage("No debug session to restart.", 4000);
+        return;
+    }
+    // Read before the session is torn down inside startDebugSession.
+    const bool wasReplay = debug_->isReplay();
+    const bool wasStopOnEntry = debug_->stopsOnEntry();
+    const QString program = debug_->program();
+    if (!program.isEmpty()) {
+        const int idx = indexOfPath(program);
+        if (idx >= 0 && idx != activeIndex_) activateBuffer(idx);
+    }
+    if (wasReplay) {
+        replayBuffer();
+        return;
+    }
+    // `debugStopOnEntry_` is a one-shot the launch consumes, so it has to be
+    // set again here — otherwise a restart of a paused session silently runs
+    // to completion, which is the opposite of what was asked for.
+    debugStopOnEntry_ = wasStopOnEntry;
+    startDebugSession(/*replay=*/false);
+}
+
+void MainWindow::startDebugSession(bool replay) {
     EditorView* v = editorView();
     if (!v) return;
     // The action is greyed out otherwise, but the control socket and any stale
@@ -1431,7 +1651,43 @@ void MainWindow::debugBuffer() {
         connect(dv, &DebuggerView::stepInRequested, debug_, &DebugSession::stepIn);
         connect(dv, &DebuggerView::stepOutRequested, debug_, &DebugSession::stepOut);
         connect(dv, &DebuggerView::stopRequested, debug_, &DebugSession::stop);
+        connect(dv, &DebuggerView::stepBackRequested, debug_, &DebugSession::stepBack);
+        connect(dv, &DebuggerView::reverseStepOverRequested,
+                debug_, &DebugSession::reverseStepOver);
+        connect(dv, &DebuggerView::reverseContinueRequested,
+                debug_, &DebugSession::reverseContinue);
+        // The two capabilities are exclusive and both are the adapter's rules,
+        // not ours: reverse execution needs a recording, and `evaluate` needs a
+        // live frame. Saying so once, up front, beats an error per keystroke.
+        dv->setReverseAvailable(replay);
+        dv->setEvaluateEnabled(
+            !replay,
+            QStringLiteral("Evaluate is unavailable in a recording — "
+                           "run Debug Buffer for a live session"));
+        // Picking a frame moves the *selected-frame* highlight, which is a
+        // different marker from the current-execution line — "looking at"
+        // versus "stopped at". Frame 0 is both, so it gets the execution one.
+        connect(dv, &DebuggerView::frameSelected, this, [this](int frameId) {
+            if (!debug_) return;
+            debug_->selectFrame(frameId);
+            showSelectedFrame(frameId);
+        });
+        connect(dv, &DebuggerView::evaluateRequested, this, [this](const QString& expr) {
+            if (!debug_) return;
+            auto* view = replPane_ ? replPane_->debugger() : nullptr;
+            debug_->evaluate(expr, [view, expr](bool ok, const QString& text) {
+                if (view) view->appendEvaluation(expr, text, ok);
+            });
+        });
     }
+    connect(debug_, &DebugSession::framesUpdated, this, [this] {
+        if (!debug_ || !replPane_ || !replPane_->debugger()) return;
+        replPane_->debugger()->setFrames(debug_->frames(), debug_->selectedFrameId());
+    });
+    connect(debug_, &DebugSession::variablesUpdated, this, [this] {
+        if (!debug_ || !replPane_ || !replPane_->debugger()) return;
+        replPane_->debugger()->setVariables(debug_->variables());
+    });
     connect(debug_, &DebugSession::pushBreakpointsRequested, this,
             &MainWindow::pushBreakpointsToSession);
     connect(debug_, &DebugSession::stateChanged, this, [this](DebugSession::State s) {
@@ -1443,29 +1699,20 @@ void MainWindow::debugBuffer() {
         else replPane_->debugger()->setRunning(false);
     });
     connect(debug_, &DebugSession::stopped, this, [this](const QString&) {
-        // Highlight the current-execution line in the editor showing the
-        // top frame's file. If the file isn't open, phase 1 simply does not
-        // highlight (auto-opening frames is a phase 5 nicety).
+        // A new stop always lands on the innermost frame, so the execution
+        // line and the selection are the same thing here. `frames()` is
+        // populated by the time this fires — `stopped` is deferred until
+        // stackTrace and variables have both answered.
         if (!debug_) return;
         const auto& frames = debug_->frames();
         if (frames.isEmpty()) return;
-        const auto& top = frames.first();
-        if (top.filePath.isEmpty()) return;
-        const int idx = indexOfPath(top.filePath);
-        if (idx < 0) return;
-        if (idx != activeIndex_) activateBuffer(idx);
-        if (EditorView* ed = editorView()) ed->setExecutionLine(top.line, /*isTopFrame=*/true);
+        showSelectedFrame(frames.first().id);
     });
     connect(debug_, &DebugSession::resumed, this, [this]() {
-        if (EditorView* ed = editorView()) ed->clearExecutionLine();
+        clearExecutionLines();
     });
     connect(debug_, &DebugSession::programExited, this, [this](int code) {
-        // Clear the execution-line highlight in every open editor.
-        for (const auto& b : buffers_) {
-            if (b->view && b->view->kind() == TabContent::Kind::Editor) {
-                static_cast<EditorView*>(b->view)->clearExecutionLine();
-            }
-        }
+        clearExecutionLines();
         statusBar()->show();
         if (code < 0) {
             statusBar()->showMessage("Debug session stopped.", 4000);
@@ -1498,11 +1745,19 @@ void MainWindow::debugBuffer() {
         }
     }
 
-    debug_->start(v->filePath(), replWorkingDir(), extraEnv, debugStopOnEntry_);
+    debug_->start(v->filePath(), replWorkingDir(), extraEnv, debugStopOnEntry_, replay);
     debugStopOnEntry_ = false;  // one-shot: the menu action always runs to completion
     statusBar()->show();
-    statusBar()->showMessage(QStringLiteral("Debugging %1…")
-                                 .arg(QFileInfo(v->filePath()).fileName()), 2000);
+    // Two different waits, said differently. A replay launch runs the whole
+    // program with the recorder attached before it answers anything — roughly
+    // 4x an untraced interpreter run — and a progress message that said
+    // "Debugging…" would look hung.
+    statusBar()->showMessage(
+        replay ? QStringLiteral("Recording %1 for time-travel…")
+                     .arg(QFileInfo(v->filePath()).fileName())
+               : QStringLiteral("Debugging %1…")
+                     .arg(QFileInfo(v->filePath()).fileName()),
+        replay ? 6000 : 2000);
 }
 
 void MainWindow::formatFile() {
@@ -2296,6 +2551,47 @@ void MainWindow::startSession() {
         breakpoints_ = new BreakpointModel(this);
         connect(breakpoints_, &BreakpointModel::changed, this,
                 [this](const QString& path) { refreshBreakpointMarkers(path); });
+
+        // The breakpoints panel is wired once, here, rather than per session:
+        // breakpoints outlive every session (one program per session,
+        // constraint 3 — "restart" respawns `tur dap`), so the panel has to
+        // work with no session at all.
+        if (replPane_ && replPane_->debugger()) {
+            auto* dv = replPane_->debugger();
+            connect(dv, &DebuggerView::breakpointEnableToggled, this,
+                    [this](const QString& path, int line, bool enabled) {
+                breakpoints_->setEnabled(path, line, enabled);
+                if (debug_ && debug_->state() == DebugSession::State::Paused) {
+                    pushBreakpointsToSession();
+                }
+            });
+            connect(dv, &DebuggerView::breakpointConditionEdited, this,
+                    [this](const QString& path, int line, const QString& cond) {
+                breakpoints_->setCondition(path, line, cond);
+                if (debug_ && debug_->state() == DebugSession::State::Paused) {
+                    pushBreakpointsToSession();
+                }
+            });
+            connect(dv, &DebuggerView::breakpointRemoved, this,
+                    [this](const QString& path, int line) {
+                breakpoints_->remove(path, line);
+                if (debug_ && debug_->state() == DebugSession::State::Paused) {
+                    pushBreakpointsToSession();
+                }
+            });
+            connect(dv, &DebuggerView::breakpointActivated, this,
+                    [this](const QString& path, int line) {
+                // Jump to it, and put the jump on the nav stack so Back
+                // returns — the same treatment a definition jump gets.
+                const NavEntry origin = currentNavEntry();
+                if (!openPath(path)) return;
+                if (EditorView* ed = editorView()) {
+                    ed->setCursorPos(ed->posFromLineCol(line - 1, 0));
+                    ed->sciWidget()->scrollCaret();
+                }
+                pushNavHistory(origin);
+            });
+        }
     }
 
     // Started last, so replWorkingDir() sees whatever this window actually
@@ -2350,6 +2646,23 @@ void MainWindow::applySessionState(const QVariantMap& state) {
         const int paneTab = state.value("replPaneTab", 0).toInt();
         replPane_->setActiveTab(paneTab);
     }
+
+    // Breakpoints survive a restart. They are a deliberate annotation on the
+    // source, not session scratch — losing them on quit is the thing that
+    // makes people stop using a debugger's gutter.
+    if (breakpoints_) {
+        for (const QVariant& v : state.value("breakpoints").toList()) {
+            const QVariantMap m = v.toMap();
+            const QString path = m.value("path").toString();
+            const int line = m.value("line").toInt();
+            if (path.isEmpty() || line < 1) continue;
+            // A file that has since been deleted or moved would otherwise
+            // accumulate breakpoints nothing can ever reach or clear.
+            if (!QFileInfo::exists(path)) continue;
+            breakpoints_->set(path, line, m.value("enabled", true).toBool(),
+                              m.value("condition").toString());
+        }
+    }
 }
 
 QVariantMap MainWindow::sessionState() const {
@@ -2384,6 +2697,20 @@ QVariantMap MainWindow::sessionState() const {
     state["activeBuffer"] = activeInList < 0 ? 0 : activeInList;
     // Which REPL-pane tab was visible (REPL=0, Debugger=1). Default REPL.
     state["replPaneTab"] = replPane_ ? replPane_->activeTab() : 0;
+
+    // Breakpoints, with their enabled flag and condition. Saved even for files
+    // not currently open — a breakpoint is an annotation on a path, and the
+    // buffer being closed does not retract it.
+    if (breakpoints_) {
+        QVariantList bps;
+        for (const auto& bp : breakpoints_->breakpoints()) {
+            bps << QVariantMap{{"path", bp.path},
+                               {"line", bp.line},
+                               {"enabled", bp.enabled},
+                               {"condition", bp.condition}};
+        }
+        state["breakpoints"] = bps;
+    }
     return state;
 }
 

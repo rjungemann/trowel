@@ -172,6 +172,22 @@ private slots:
     // A debug session is a separate sibling process from the REPL (there is
     // no `attach`), so anything loaded into the REPL is not visible to it.
     void debugBuffer();
+    // What F5 does: Continue when a session is paused, Debug Buffer otherwise.
+    // Kept separate from `debugBuffer` so the control socket's `debug.start`
+    // still means "start", unconditionally.
+    void debugOrContinue();
+    // Record the active buffer's run and step through it in both directions
+    // (`launch` with `"replay": true`). Reverse execution is only served from
+    // a recording; `evaluate` is only served outside one.
+    void replayBuffer();
+    // Respawn the current session against the same file in the same mode.
+    // `tur dap` has no `restart` request and runs one program per session
+    // (constraint 3), so a restart is a new process, not a rewind.
+    void restartDebug();
+    // Toggle a breakpoint on the line holding the caret. The margin click is
+    // the other way in; this one is discoverable from the menu and works
+    // without hunting for a 14px gutter strip.
+    void toggleBreakpointAtCaret();
     void formatFile();
     void requestCompletion();
     void showDocumentation();
@@ -278,8 +294,22 @@ private:
     // Repaint breakpoint gutter markers for the editor showing `path` (or all
     // editors when `path` is empty), driven by BreakpointModel::changed.
     void refreshBreakpointMarkers(const QString& path);
+    // Rebuild the Debugger tab's breakpoints panel from the model, including
+    // the basename-collision warning rows.
+    void refreshBreakpointPanel();
     // Push the program file's breakpoints to the live debug session.
     void pushBreakpointsToSession();
+    // Drop the execution-line and selected-frame markers from every open
+    // editor. Called on resume, on exit, and before moving the marker to a
+    // frame that may be in a different buffer.
+    void clearExecutionLines();
+    // Move the execution / selected-frame marker to `frameId`'s source line,
+    // activating that buffer if it is open. Frame 0 gets the solid arrow
+    // ("stopped here"); any other frame gets the hollow one ("looking here").
+    void showSelectedFrame(int frameId);
+    // The body both Debug Buffer and Time-Travel Debug run: gate, save, tear
+    // down any live session, build a new one, wire it, launch.
+    void startDebugSession(bool replay);
     QString computeDisplayName(const Buffer& buf) const;
     void updateBufferDisplayName(int index);
     Buffer* addBuffer(const QString& path, bool untitledIfEmpty);
@@ -325,6 +355,9 @@ private:
     QAction* renameAction_ = nullptr;
     QAction* traceAction_ = nullptr;
     QAction* debugAction_ = nullptr;
+    QAction* replayAction_ = nullptr;
+    QAction* restartDebugAction_ = nullptr;
+    QAction* toggleBreakpointAction_ = nullptr;
     // Backing store for the references chooser: the rows shown are strings, so
     // the spans they stand for have to live somewhere the selection can reach.
     QVector<LspSpan> referenceSpans_;

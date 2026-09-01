@@ -4,6 +4,9 @@
 
 #include <QJsonArray>
 
+#include <algorithm>
+#include <utility>
+
 namespace trowel {
 
 namespace {
@@ -39,12 +42,14 @@ bool DebugSession::isRunning() const {
 }
 
 void DebugSession::start(const QString& program, const QString& workingDir,
-                         const QStringList& extraEnv, bool stopOnEntry) {
+                         const QStringList& extraEnv, bool stopOnEntry, bool replay) {
     if (state_ != State::Idle && state_ != State::Terminated) return;
     program_ = program;
     stopOnEntry_ = stopOnEntry;
+    replay_ = replay;
     userStopped_ = false;
     exitCode_ = -1;
+    stopCount_ = 0;
     frames_.clear();
     variables_.clear();
     output_.clear();
@@ -91,6 +96,11 @@ void DebugSession::onInitialize() {
                 {"program", program_},
                 {"stopOnEntry", stopOnEntry_},
             };
+            // Only sent when set. A `"replay": false` would be read the same
+            // way by this adapter, but the flag is the whole difference
+            // between two very different sessions and it belongs in the wire
+            // log only when it is doing something.
+            if (replay_) args.insert("replay", true);
             client_->request("launch", args,
                 [this](const QJsonValue&, const DapError* err) {
                     if (err) {
@@ -160,16 +170,25 @@ void DebugSession::onStopped(const QJsonObject& body) {
     // Re-push breakpoints now that the adapter is reading stdin again —
     // mid-run setBreakpoints is not processed until the next stop (constraint 6).
     emit pushBreakpointsRequested();
-    refreshFrames();
-    emit stopped(reason);
+    // `stopped` waits for the frames and the innermost frame's variables. A
+    // consumer that reads `frames()` from this signal is the normal case — the
+    // execution-line marker, the stack list, the variables pane are all it —
+    // and every one of them would otherwise read the previous stop's data.
+    refreshFrames([this, reason] {
+        ++stopCount_;
+        emit framesUpdated();
+        emit variablesUpdated();
+        emit stopped(reason);
+    });
 }
 
-void DebugSession::refreshFrames() {
+void DebugSession::refreshFrames(std::function<void()> done) {
     client_->request(
         "stackTrace", QJsonObject{{"threadId", 1}},
-        [this](const QJsonValue& body, const DapError* err) {
+        [this, done = std::move(done)](const QJsonValue& body, const DapError* err) {
             frames_.clear();
-            if (err) { emit stopped({}); return; }
+            variables_.clear();
+            if (err) { if (done) done(); return; }
             const QJsonArray arr = body.toObject().value("stackFrames").toArray();
             for (const QJsonValue& f : arr) {
                 const QJsonObject fo = f.toObject();
@@ -182,21 +201,24 @@ void DebugSession::refreshFrames() {
                 frame.filePath = src.value("path").toString();
                 frames_.append(frame);
             }
-            if (!frames_.isEmpty()) {
-                selectedFrameId_ = frames_.first().id;
-                refreshVariables(selectedFrameId_);
-            }
+            if (frames_.isEmpty()) { if (done) done(); return; }
+            // A new stop always lands on the innermost frame. Whatever the
+            // user had selected belonged to the previous stop and its id may
+            // not even exist in this stack.
+            selectedFrameId_ = frames_.first().id;
+            refreshVariables(selectedFrameId_, done);
         });
 }
 
-void DebugSession::refreshVariables(int frameId) {
+void DebugSession::refreshVariables(int frameId, std::function<void()> done) {
     // `scopes` returns one Locals scope whose reference is frameId + 1
     // (constraint 7). `variables` against that reference returns the flat
     // variable list.
     client_->request(
         "scopes", QJsonObject{{"frameId", frameId}},
-        [this, frameId](const QJsonValue& body, const DapError* err) {
-            if (err) return;
+        [this, done = std::move(done)](const QJsonValue& body, const DapError* err) {
+            variables_.clear();
+            if (err) { if (done) done(); return; }
             const QJsonArray scopes = body.toObject().value("scopes").toArray();
             int varRef = 0;
             for (const QJsonValue& s : scopes) {
@@ -207,15 +229,12 @@ void DebugSession::refreshVariables(int frameId) {
                     break;
                 }
             }
-            if (varRef == 0) {
-                variables_.clear();
-                return;
-            }
+            if (varRef == 0) { if (done) done(); return; }
             client_->request(
                 "variables", QJsonObject{{"variablesReference", varRef}},
-                [this](const QJsonValue& body, const DapError* err) {
+                [this, done](const QJsonValue& body, const DapError* err) {
                     variables_.clear();
-                    if (err) return;
+                    if (err) { if (done) done(); return; }
                     const QJsonArray arr = body.toObject().value("variables").toArray();
                     for (const QJsonValue& v : arr) {
                         const QJsonObject vo = v.toObject();
@@ -225,8 +244,40 @@ void DebugSession::refreshVariables(int frameId) {
                         var.type = vo.value("type").toString();
                         variables_.append(var);
                     }
+                    if (done) done();
                 });
-            (void)frameId;
+        });
+}
+
+void DebugSession::selectFrame(int frameId) {
+    if (state_ != State::Paused) return;
+    // Guard against a stale id from a list that has since been rebuilt: the
+    // adapter clamps a negative frameId to 0 (constraint 11) and would answer
+    // for the wrong frame rather than fail.
+    const bool known = std::any_of(frames_.cbegin(), frames_.cend(),
+                                   [frameId](const Frame& f) { return f.id == frameId; });
+    if (!known) return;
+    selectedFrameId_ = frameId;
+    refreshVariables(frameId, [this] { emit variablesUpdated(); });
+}
+
+void DebugSession::evaluate(const QString& expression, EvaluateCallback cb) {
+    if (state_ != State::Paused) {
+        if (cb) cb(false, QStringLiteral("not paused"));
+        return;
+    }
+    client_->request(
+        "evaluate",
+        QJsonObject{{"expression", expression},
+                    {"frameId", selectedFrameId_},
+                    {"context", "repl"}},
+        [cb = std::move(cb)](const QJsonValue& body, const DapError* err) {
+            if (!cb) return;
+            // The adapter's own message, verbatim — in a recording it is
+            // "cannot evaluate in a recording -- relaunch without \"replay\"",
+            // which says more than anything this end could synthesize.
+            if (err) { cb(false, err->message); return; }
+            cb(true, body.toObject().value("result").toString());
         });
 }
 
@@ -257,6 +308,25 @@ void DebugSession::stepOut() {
     client_->request("stepOut", QJsonObject{{"threadId", 1}}, nullptr);
 }
 
+void DebugSession::stepBack() {
+    if (state_ != State::Paused || !replay_) return;
+    client_->request("stepBack", QJsonObject{{"threadId", 1}}, nullptr);
+}
+
+void DebugSession::reverseStepOver() {
+    if (state_ != State::Paused || !replay_) return;
+    client_->request("reverseNext", QJsonObject{{"threadId", 1}}, nullptr);
+}
+
+void DebugSession::reverseContinue() {
+    if (state_ != State::Paused || !replay_) return;
+    // Unlike forward `continue`, this does not leave us Running: the adapter
+    // seeks the cursor backwards and immediately emits another `stopped`. It
+    // stays Paused throughout, so there is no state change to make here and
+    // nothing to clear — the next `stopped` replaces the frames wholesale.
+    client_->request("reverseContinue", QJsonObject{{"threadId", 1}}, nullptr);
+}
+
 void DebugSession::setBreakpoints(const QString& path,
                                   const QVector<BreakpointSpec>& bps) {
     // `tur dap` matches breakpoints by basename (constraint 5), but the
@@ -265,6 +335,10 @@ void DebugSession::setBreakpoints(const QString& path,
     // the model.
     QJsonArray arr;
     for (const BreakpointSpec& b : bps) {
+        // DAP has no notion of a disabled breakpoint — the set you send *is*
+        // the set that binds. A disabled one is therefore simply not sent,
+        // rather than sent and hoped to be ignored.
+        if (!b.enabled) continue;
         QJsonObject bp{
             {"line", b.line},
         };

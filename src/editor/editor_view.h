@@ -155,6 +155,10 @@ public:
     // Replace all breakpoint markers in this buffer. Clears the previous set
     // first, mirroring setDiagnostics.
     void setBreakpointMarkers(const QVector<BreakpointMark>& marks);
+    // Ask Scintilla where each breakpoint marker has ended up and report the
+    // ones that moved. Called after an edit; the owner applies the moves to
+    // the model, which is the source of truth.
+    void reconcileBreakpointLines();
     // Paint the current-execution line (frame 0) or a selected frame. `line`
     // is 1-based; `isTopFrame` true uses the current-line marker, false the
     // selected-frame marker (visually distinct). Reveals the line.
@@ -205,6 +209,12 @@ public:
         int bottom = 0;
     };
     GuideLine bracketGuideLine() const { return guideLine_; }
+
+    // Where the gutter bar is drawn, in viewport pixels, reusing GuideLine's
+    // shape (`x` is its left edge; it is a few pixels wide, not a hairline).
+    // Unlike the spine this is visible for a single-line pair too — it marks
+    // the rows the expression occupies, and one row is a valid answer.
+    GuideLine bracketGutterBar() const { return gutterBar_; }
 
     // Show an arbitrary chooser as a user list. Rows are displayed verbatim and
     // the chosen row's index comes back through `listRowChosen` — unlike the
@@ -283,6 +293,10 @@ signals:
     // toggles the breakpoint in the model; the model's `changed` signal flows
     // back here as a new set of markers.
     void breakpointToggleRequested(int line);
+    // Breakpoint markers moved because the text around them was edited.
+    // Each pair is {old 1-based line, new 1-based line}; a new line of 0 means
+    // the line holding it was deleted and the breakpoint should go with it.
+    void breakpointLinesMoved(const QVector<QPair<int, int>>& moves);
 
 protected:
     // Watches the rename input for Escape and focus loss.
@@ -332,6 +346,15 @@ private:
     int guideOpener_ = -1;
     int guideCloser_ = -1;
     GuideLine guideLine_;
+    GuideLine gutterBar_;
+    // Scintilla marker handles for the breakpoints painted in this buffer,
+    // beside the line each was placed on. Scintilla moves the marker across
+    // edits; comparing the two is how a move is detected.
+    struct BreakpointHandle {
+        int handle = -1;
+        int line = 0;  // 1-based, as last reconciled
+    };
+    QVector<BreakpointHandle> bpHandles_;
     // Reposition the vertical overlay from guideOpener_/guideCloser_.
     void repositionBracketGuideOverlay();
     // The span the guide currently occupies, so the control API can read back

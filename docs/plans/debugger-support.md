@@ -8,8 +8,11 @@ REPL inside the right-hand pane.
 Companion to [`lsp-support.md`](lsp-support.md), which established the
 JSON-RPC-over-stdio transport this reuses.
 
-> **Status:** not started. Phase 0 (spike) should be done before committing to
-> the rest.
+> **Status:** all five phases built. Deviations are recorded in
+> [As built](#as-built--deviations) at the end. Reverse execution over a
+> recording is [`editor-intelligence.md`](editor-intelligence.md) T3 and also
+> shipped; its T4–T6 (timeline, console replay, depth ribbon) are blocked on an
+> upstream addition, measured in that plan's §5.5.1.
 
 ## Context
 
@@ -625,6 +628,96 @@ Each maps to a specific upstream file — `src/turi/dap.c` and `src/turi/eval.h`
 - `src/lsp/lsp_transport.{h,cpp}` — *optional*, `stderrReceived` signal
 
 ---
+
+## As built — deviations
+
+All five phases have landed. These differ from the plan above.
+
+1. **`TabBar::setClosable` is per-index, not a whole-bar flag.** The plan wrote
+   `setClosable(bool)`; the signature is `setClosable(int index, bool)`, next to
+   `setModified` and `setReadOnly`, which are already per-index. Same ~15 lines,
+   and the document tab bar still needs no changes.
+
+2. **A non-closable tab insets its label by `kHPad` on the right.** The first
+   cut reused the closable path's `-closeSlot` inset, which is 0 when there is
+   no close glyph — so the label sat 18px from the left edge and 6px from the
+   right, visibly off-centre against the tab's own divider. The tab's *width*
+   was always symmetric (`textW + kHPad * 2`); only the paint rect was not.
+
+3. **Breakpoints are toggled from the menu as well as the margin.** The plan
+   specified only `marginClicked`. A 14px unlabelled gutter strip is not a
+   discoverable control and gives a keyboard user no way in at all, so
+   **Run ▸ Toggle Breakpoint (F9)** toggles on the caret's line. It shares the
+   `EvalMode::Buffer` gate with Debug Buffer — a breakpoint in a file the
+   debugger will never load is a decoration — and, when a session is already
+   paused, it pushes `setBreakpoints` immediately rather than waiting for the
+   next stop (constraint 6 permits this only while paused, which is exactly the
+   case where stepping would otherwise sail past the line just set).
+
+4. **`stopped` is deferred until the frames and variables have landed.** The
+   plan's signal list implied the obvious spelling — emit on the DAP event,
+   refresh in the background — and phase 1 shipped it that way. It is wrong:
+   `stackTrace` is a round trip, so every consumer read the *previous* stop's
+   data exactly once per stop. The current-execution marker never appeared at
+   all, because the first stop's frame list was empty when the slot ran.
+   `stopped` now fires from the continuation of `stackTrace` → `scopes` →
+   `variables`. `framesUpdated` and `variablesUpdated` are separate so a pane
+   can repaint without caring why.
+
+5. **A stop counter, because stepping does not change state.** A step is
+   Paused → Paused, and often lands on the same line, so neither `state()` nor
+   the frame contents can answer "has my step landed?" — which makes every
+   test of stepping a race. `DebugSession::stopCount()` increments immediately
+   before `stopped` is emitted, and `debug.status` reports it. This was found
+   by a step-back test that passed for the wrong reason.
+
+6. **Breakpoints are pushed for the program's file, not the active buffer's.**
+   `pushBreakpointsToSession` read `editorView()->filePath()`, so switching
+   tabs while paused re-pointed the session's breakpoint set at whatever
+   happened to be in front. It reads `DebugSession::program()` now.
+
+7. **A disabled breakpoint is not sent at all.** DAP has no disabled
+   breakpoint — the set you send is the set that binds — so `setBreakpoints`
+   filters them out rather than sending them and hoping.
+
+8. **Deleting a line does not delete its breakpoint.** The plan says to track
+   lines with `markerAdd`'s handle, which phase 5 does. But the intuition
+   about what happens on a delete is wrong, and measuring it changed the
+   design: Scintilla **merges** a removed line's markers onto the line that
+   takes its place, so `markerLineFromHandle` never returns -1 for this case
+   and the breakpoint lands on the next statement. That is Scintilla's rule
+   and it is left alone; `test_deleting_a_line_merges_its_breakpoint_onto_the_next`
+   pins it so it stays a decision rather than a surprise.
+
+9. **Line moves are applied as a batch, not one at a time.** Inserting a line
+   above two adjacent breakpoints produces `{5→6, 6→7}`, and applying `5→6`
+   first lands on the breakpoint still sitting at 6. `BreakpointModel::
+   applyLineMoves` works against a snapshot and de-duplicates afterwards.
+
+10. **Restart carries the mode *and* the stop-on-entry flag.** `tur dap` has no
+    `restart` request and runs one program per session (constraint 3), so this
+    is a respawn. The first cut carried only the file, and restarting a paused
+    session silently ran it to completion — `debugStopOnEntry_` is a one-shot
+    the launch consumes, so it has to be set again from
+    `DebugSession::stopsOnEntry()`.
+
+11. **The reverse-execution buttons are hidden, not disabled, outside a
+    recording.** Disabled implies they might light up; they cannot, because a
+    live interpreter has no recording to run backwards through. The same logic
+    inverted applies to the evaluate line, which is disabled in a recording
+    with the reason as its placeholder rather than producing an error per
+    keystroke.
+
+12. **F5 continues when paused and starts otherwise**, and the Debugger tab's
+    Continue button carries no shortcut. Both actions live in the same window,
+    so both claiming F5 was an ambiguous shortcut — which Qt resolves by firing
+    neither. The control socket's `debug.start` still means start,
+    unconditionally; only the F5 action branches.
+
+13. **The breakpoints panel edits only its condition column.**
+    `Qt::ItemIsEditable` is a property of the whole item, so making the
+    condition editable makes the location editable too. A one-method delegate
+    refuses to build an editor for column 0.
 
 ## Summary
 
