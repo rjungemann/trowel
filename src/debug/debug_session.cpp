@@ -50,6 +50,10 @@ void DebugSession::start(const QString& program, const QString& workingDir,
     userStopped_ = false;
     exitCode_ = -1;
     stopCount_ = 0;
+    timeline_ = false;
+    timeline_info_ = Timeline{};
+    seekPending_ = false;
+    seekQueued_ = -1;
     frames_.clear();
     variables_.clear();
     output_.clear();
@@ -89,7 +93,11 @@ void DebugSession::onInitialize() {
                 emit sessionFailed(err->message);
                 return;
             }
-            (void)body;
+            // The adapter's own answer, not the pinned version: ResolveTurBinary
+            // honours a QSettings override and PATH, so the `tur` on the other
+            // end of this pipe is not necessarily the one the pin names.
+            timeline_ = body.toObject()
+                            .value("supportsTurmericReplayTimeline").toBool(false);
             // Launch the program. `launch` carries no `cwd` (constraint 4);
             // the working directory was set on the child process at spawn.
             QJsonObject args{
@@ -144,6 +152,16 @@ void DebugSession::onEvent(const QString& event, const QJsonObject& body) {
         onStopped(body);
         return;
     }
+    if (event == "replayOutput") {
+        // A backwards seek shortens the transcript, and a delta cannot express
+        // a truncation — so the adapter re-sends the whole thing and the
+        // console swaps rather than grows. Without this the console keeps
+        // showing output from steps the cursor has rewound past, which is the
+        // one thing a time-travel console must not do.
+        output_ = body.value("output").toString();
+        emit outputReplaced(output_);
+        return;
+    }
     if (event == "output") {
         const QString text = body.value("output").toString();
         if (!text.isEmpty()) {
@@ -174,6 +192,7 @@ void DebugSession::onStopped(const QJsonObject& body) {
     // consumer that reads `frames()` from this signal is the normal case — the
     // execution-line marker, the stack list, the variables pane are all it —
     // and every one of them would otherwise read the previous stop's data.
+    if (replay_ && timeline_) refreshTimeline();
     refreshFrames([this, reason] {
         ++stopCount_;
         emit framesUpdated();
@@ -306,6 +325,76 @@ void DebugSession::stepIn() {
 void DebugSession::stepOut() {
     if (state_ != State::Paused) return;
     client_->request("stepOut", QJsonObject{{"threadId", 1}}, nullptr);
+}
+
+void DebugSession::refreshTimeline() {
+    if (!replay_ || !timeline_) return;
+    client_->request("replayInfo", QJsonObject{},
+        [this](const QJsonValue& body, const DapError* err) {
+            if (err) return;
+            const QJsonObject o = body.toObject();
+            timeline_info_.steps = o.value("steps").toInt(0);
+            timeline_info_.index = o.value("index").toInt(0);
+            timeline_info_.depth = o.value("depth").toInt(0);
+            timeline_info_.outputLength = o.value("outputLength").toInt(0);
+            emit timelineUpdated();
+        });
+}
+
+void DebugSession::seek(int index) {
+    if (state_ != State::Paused || !replay_ || !timeline_) return;
+    if (index < 0) index = 0;
+
+    // Coalesce. The adapter answers strictly in order, so a slider drag that
+    // sent one request per pixel would walk the cursor through every
+    // intermediate step long after the user let go. Only the newest target
+    // matters; the ones in between were never destinations.
+    if (seekPending_) {
+        seekQueued_ = index;
+        return;
+    }
+    seekPending_ = true;
+    client_->request("replaySeek", QJsonObject{{"index", index}},
+        [this](const QJsonValue& body, const DapError* err) {
+            seekPending_ = false;
+            if (!err) {
+                // Believe the adapter over our own arithmetic: it clamps into
+                // range and reports where the cursor actually landed.
+                timeline_info_.index = body.toObject().value("index").toInt(
+                    timeline_info_.index);
+                emit timelineUpdated();
+            }
+            // A `stopped` event follows the response and refreshes the frames,
+            // so nothing else is needed here.
+            if (seekQueued_ >= 0) {
+                const int next = seekQueued_;
+                seekQueued_ = -1;
+                seek(next);
+            }
+        });
+}
+
+void DebugSession::requestSites(int buckets, SitesCallback cb) {
+    if (!replay_ || !timeline_) {
+        if (cb) cb({});
+        return;
+    }
+    client_->request("replaySites", QJsonObject{{"buckets", buckets}},
+        [cb = std::move(cb)](const QJsonValue& body, const DapError* err) {
+            if (!cb) return;
+            if (err) { cb({}); return; }
+            QVector<Site> sites;
+            for (const QJsonValue& v : body.toObject().value("sites").toArray()) {
+                const QJsonObject o = v.toObject();
+                Site s;
+                s.index = o.value("index").toInt(0);
+                s.line = o.value("line").toInt(0);
+                s.depth = o.value("depth").toInt(0);
+                s.filePath = o.value("file").toString();
+                sites.append(s);
+            }
+            cb(sites);
+        });
 }
 
 void DebugSession::stepBack() {

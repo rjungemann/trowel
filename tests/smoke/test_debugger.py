@@ -638,3 +638,128 @@ def test_a_file_with_main_does_stop(trowel, fixture_files: Path):
         trowel.call("debug.stop")
     finally:
         prog.unlink(missing_ok=True)
+
+
+# --- T4–T6: the timeline ---------------------------------------------------
+#
+# Needs `tur` v0.42.2 or newer, which advertises `supportsTurmericReplayTimeline`
+# and serves `replayInfo` / `replaySeek` / `replaySites`. These skip against an
+# older pinned binary rather than fail: the capability is read off the wire, so
+# the tests start asserting the day TROWEL_TURMERIC_VERSION moves.
+
+def _replay_with_timeline(trowel, fixture_files: Path, prog_text: str, name: str):
+    prog = fixture_files / name
+    prog.write_text(prog_text)
+    _open(trowel, prog)
+    trowel.call("debug.start", {"replay": True, "timeout_ms": 20000})
+    st = _wait_state(trowel, "paused", timeout=20.0)
+    if st.get("state") != "paused":
+        prog.unlink(missing_ok=True)
+        pytest.skip("replay session did not pause")
+    tl = trowel.call("debug.timeline")
+    if not tl.get("supported"):
+        trowel.call("debug.stop")
+        prog.unlink(missing_ok=True)
+        pytest.skip("this `tur` has no replay timeline (needs v0.42.2+)")
+    return prog, tl
+
+
+_RECURSIVE = ('(defn work [n : int] : int\n'
+              '  (if (< n 2) n (+ (work (- n 1)) (work (- n 2)))))\n\n'
+              '(defn main [] : int\n  (let [^mut i 0]\n    (while (< i 3)\n'
+              '      (println "tick")\n      (set! i (+ i 1))))\n  (work 7)\n  0)\n')
+
+
+def test_timeline_reports_a_length_and_a_cursor(trowel, fixture_files: Path):
+    prog, tl = _replay_with_timeline(trowel, fixture_files, _RECURSIVE, "tl_len.tur")
+    try:
+        assert tl["steps"] > 0, tl
+        assert tl["index"] == 0, tl
+        trowel.call("debug.stop")
+    finally:
+        prog.unlink(missing_ok=True)
+
+
+def test_seek_moves_the_cursor_and_the_frames_follow(trowel, fixture_files: Path):
+    prog, tl = _replay_with_timeline(trowel, fixture_files, _RECURSIVE, "tl_seek.tur")
+    try:
+        import time
+        last = tl["steps"] - 1
+        trowel.call("debug.seek", {"index": last})
+        for _ in range(60):
+            if trowel.call("debug.timeline")["index"] == last:
+                break
+            time.sleep(0.05)
+        assert trowel.call("debug.timeline")["index"] == last
+        # An out-of-range seek clamps rather than erroring: a scrubber dragged
+        # past the end means "the end".
+        trowel.call("debug.seek", {"index": 10 ** 9})
+        time.sleep(0.4)
+        assert trowel.call("debug.timeline")["index"] == last
+        trowel.call("debug.stop")
+    finally:
+        prog.unlink(missing_ok=True)
+
+
+def test_seeking_backwards_rewinds_the_console(trowel, fixture_files: Path):
+    """T5. A backwards seek shortens the transcript, which a delta cannot say.
+
+    The adapter re-sends everything as `replayOutput` and the console swaps
+    rather than grows. Without it the console keeps showing output from steps
+    the cursor has rewound past — the one thing a time-travel console must not
+    do.
+    """
+    prog, tl = _replay_with_timeline(trowel, fixture_files, _RECURSIVE, "tl_out.tur")
+    try:
+        import time
+        trowel.call("debug.seek", {"index": tl["steps"] - 1})
+        time.sleep(0.8)
+        assert "tick" in trowel.call("debug.status")["output"]
+
+        trowel.call("debug.seek", {"index": 0})
+        time.sleep(0.8)
+        assert trowel.call("debug.status")["output"] == ""
+        trowel.call("debug.stop")
+    finally:
+        prog.unlink(missing_ok=True)
+
+
+def test_sites_carry_depth_and_position_together(trowel, fixture_files: Path):
+    """T6's data source. `replaySites` is Try Turmeric's `trace-site-at` shape.
+
+    Depth *and* position in one round trip, because a scrubber's cursor readout
+    and a depth ribbon want the same steps. A bucket reports its range's maximum
+    depth, so the recursion in `work` survives the downsample.
+    """
+    prog, _ = _replay_with_timeline(trowel, fixture_files, _RECURSIVE, "tl_sites.tur")
+    try:
+        sites = trowel.call("debug.sites", {"buckets": 16})["sites"]
+        assert len(sites) == 16, sites
+        assert all(s["line"] > 0 and s["file"] for s in sites), sites
+        # `work` recurses, so the ribbon must show more than the one frame
+        # `main` occupies.
+        assert max(s["depth"] for s in sites) > 1, sites
+        trowel.call("debug.stop")
+    finally:
+        prog.unlink(missing_ok=True)
+
+
+def test_a_live_session_refuses_to_scrub(trowel, fixture_files: Path):
+    """A live session has no recording, so there is no axis to scrub.
+
+    `supported` and `available` are different questions, and conflating them is
+    how this went wrong first time: the adapter advertises the capability on
+    `initialize`, before it knows whether the launch is a replay, so
+    `supported` is true for a live session too. Only `available` says whether
+    *this* session can seek. With a capable `tur` and no such distinction,
+    `debug.seek` replied Ok and silently did nothing.
+    """
+    _open(trowel, fixture_files / "trace_trivial.tur")
+    trowel.call("debug.start", {"stop_on_entry": True, "timeout_ms": DEBUG_MS})
+    _wait_state(trowel, "paused")
+    tl = trowel.call("debug.timeline")
+    assert tl["available"] is False, tl
+    with pytest.raises(ControlError) as exc:
+        trowel.call("debug.seek", {"index": 0})
+    assert exc.value.code in ("no_timeline", "not_a_recording"), exc.value.code
+    trowel.call("debug.stop")

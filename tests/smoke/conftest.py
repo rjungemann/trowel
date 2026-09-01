@@ -109,6 +109,17 @@ def _launch_trowel(tmp_path: Path, args: list[str] | None = None) -> TrowelProc:
     # the developer's real preferences — restoring their open buffers into a
     # test that expects an empty one. This pins settings to a per-test INI file.
     env["TROWEL_SETTINGS_DIR"] = str(home / "settings")
+    # Optional override for the `tur` the app resolves, seeded into the same
+    # per-test INI that TROWEL_SETTINGS_DIR pins. `ResolveTurBinary()` checks
+    # QSettings "repl/turBinary" first, so this is the supported way to run the
+    # suite against a locally built toolchain — which is what lets the timeline
+    # tests be exercised before TROWEL_TURMERIC_VERSION moves, instead of
+    # skipping until then.
+    tur_override = os.environ.get("TROWEL_TEST_TUR")
+    if tur_override:
+        ini = home / "settings" / "turmeric" / "Trowel.ini"
+        ini.parent.mkdir(parents=True, exist_ok=True)
+        ini.write_text(f"[repl]\nturBinary={tur_override}\n")
     # Force English so REPL banners are predictable.
     env.setdefault("LC_ALL", "en_US.UTF-8")
 

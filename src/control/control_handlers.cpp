@@ -1158,6 +1158,76 @@ void HandleDebugStep(MainWindow* w, const QJsonObject& args, const Reply& reply)
     reply(Ok(), nullptr);
 }
 
+void HandleDebugTimeline(MainWindow* w, const QJsonObject&, const Reply& reply) {
+    DebugSession* d = w->debugSession();
+    if (!d) { ReplyErr(reply, "no_debug", "no debug session is running"); return; }
+    const DebugSession::Timeline& t = d->timeline();
+    QJsonObject o;
+    // Two different questions. `supported` is about the adapter: `tur dap`
+    // advertises the capability on `initialize`, before it knows whether this
+    // launch is a replay. `available` is about *this session* — only a
+    // recording has an axis to scrub.
+    o["supported"] = d->hasTimeline();
+    o["available"] = d->hasTimeline() && d->isReplay();
+    o["steps"] = t.steps;
+    o["index"] = t.index;
+    o["depth"] = t.depth;
+    o["output_length"] = t.outputLength;
+    reply(o, nullptr);
+}
+
+void HandleDebugSeek(MainWindow* w, const QJsonObject& args, const Reply& reply) {
+    DebugSession* d = w->debugSession();
+    if (!d) { ReplyErr(reply, "no_debug", "no debug session is running"); return; }
+    if (!d->hasTimeline()) {
+        ReplyErr(reply, "no_timeline",
+                 "this `tur` has no replay timeline (needs v0.42.2 or newer)");
+        return;
+    }
+    // The capability is advertised unconditionally by the adapter, so a live
+    // session reaches here with `hasTimeline()` true and nothing to scrub.
+    // `DebugSession::seek` would no-op silently; refusing with the reason is
+    // the whole difference between a limitation and a bug.
+    if (!d->isReplay()) {
+        ReplyErr(reply, "not_a_recording",
+                 "this session is live, not a recording -- relaunch with `replay`");
+        return;
+    }
+    if (!args.contains("index")) { ReplyErr(reply, "bad_args", "need `index`"); return; }
+    d->seek(args.value("index").toInt(0));
+    // The cursor lands asynchronously — a `stopped` follows. Callers poll
+    // `debug.timeline` or wait on `stop_count`.
+    reply(Ok(), nullptr);
+}
+
+void HandleDebugSites(MainWindow* w, QPointer<ControlConnection> conn,
+                      const QJsonObject& args, const Reply& reply) {
+    DebugSession* d = w->debugSession();
+    if (!d) { ReplyErr(reply, "no_debug", "no debug session is running"); return; }
+    if (!d->hasTimeline()) {
+        ReplyErr(reply, "no_timeline",
+                 "this `tur` has no replay timeline (needs v0.42.2 or newer)");
+        return;
+    }
+    if (!d->isReplay()) {
+        ReplyErr(reply, "not_a_recording",
+                 "this session is live, not a recording -- relaunch with `replay`");
+        return;
+    }
+    const int buckets = args.value("buckets").toInt(64);
+    d->requestSites(buckets, [reply, conn](const QVector<DebugSession::Site>& sites) {
+        if (!conn) return;
+        QJsonArray arr;
+        for (const DebugSession::Site& s : sites) {
+            arr.append(QJsonObject{{"index", s.index}, {"line", s.line},
+                                   {"depth", s.depth}, {"file", s.filePath}});
+        }
+        QJsonObject o;
+        o["sites"] = arr;
+        reply(o, nullptr);
+    });
+}
+
 void HandleDebugReverseContinue(MainWindow* w, const QJsonObject&, const Reply& reply) {
     DebugSession* d = w->debugSession();
     if (!d) { ReplyErr(reply, "no_debug", "no debug session is running"); return; }
@@ -1507,6 +1577,9 @@ void Dispatch(WindowManager* windows, QPointer<ControlConnection> conn,
     if (cmd == "debug.select_frame")   { HandleDebugSelectFrame(w, args, reply); return; }
     if (cmd == "debug.evaluate")       { HandleDebugEvaluate(w, conn, args, reply); return; }
     if (cmd == "debug.reverse_continue") { HandleDebugReverseContinue(w, args, reply); return; }
+    if (cmd == "debug.timeline")       { HandleDebugTimeline(w, args, reply); return; }
+    if (cmd == "debug.seek")           { HandleDebugSeek(w, args, reply); return; }
+    if (cmd == "debug.sites")          { HandleDebugSites(w, conn, args, reply); return; }
 
     if (cmd == "wait.repl_output")     { HandleWaitReplOutput(w, conn, args, reply); return; }
     if (cmd == "wait.repl_idle")       { HandleWaitReplIdle(w, conn, args, reply); return; }

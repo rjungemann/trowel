@@ -109,6 +109,52 @@ public:
     void stepIn();
     void stepOut();
 
+    // --- The timeline (T4–T6), served from a recording ---
+    //
+    // Turmeric v0.42.2 adds three custom requests over the trace cursor,
+    // advertised as `supportsTurmericReplayTimeline`. DAP models execution as a
+    // sequence of steps and has no vocabulary for an axis; these give it one.
+
+    // Whether the adapter answered `initialize` with the timeline extension.
+    // Read off the wire, not inferred from the pinned version:
+    // `ResolveTurBinary()` honours a QSettings override and PATH, so the `tur`
+    // on the other end is not necessarily the one the pin names.
+    bool hasTimeline() const { return timeline_; }
+
+    // How long the recording is and where the cursor sits. `steps` is 0 until
+    // the first `replayInfo` answers.
+    struct Timeline {
+        int steps = 0;
+        int index = 0;
+        int depth = 0;
+        int outputLength = 0;
+    };
+    const Timeline& timeline() const { return timeline_info_; }
+    void refreshTimeline();
+
+    // Move the cursor to `index`. The adapter clamps and reports where it
+    // actually landed, then emits `stopped` — so the frames, variables and
+    // gutter follow exactly as they do for a step.
+    //
+    // Seeks coalesce: while one is in flight a second only records its target,
+    // and the newest target wins when the first returns. Dragging a slider
+    // otherwise queues one round trip per pixel against an adapter that answers
+    // them strictly in order, and the cursor arrives somewhere the user stopped
+    // asking for several hundred milliseconds ago. This is the same
+    // pending/queued pair Try Turmeric's `traceSeek` uses.
+    void seek(int index);
+
+    // Position and depth for a set of steps: `buckets` downsampled across the
+    // whole recording (for the depth ribbon), or specific `indices`.
+    struct Site {
+        int index = 0;
+        int line = 0;
+        int depth = 0;
+        QString filePath;
+    };
+    using SitesCallback = std::function<void(const QVector<Site>&)>;
+    void requestSites(int buckets, SitesCallback cb);
+
     // Reverse execution, served from a recording. No-ops unless Paused *and*
     // in replay: a live interpreter cannot run backwards, and the adapter
     // answers "not supported while paused" rather than pretending.
@@ -197,6 +243,13 @@ signals:
     // The variables for the selected frame changed — a new stop, or the user
     // picking a different frame.
     void variablesUpdated();
+    // `replayInfo` answered: the recording's length or the cursor moved.
+    void timelineUpdated();
+    // The whole transcript was replaced, not appended to. A backwards seek
+    // shortens it, and a delta cannot express a truncation — so the adapter
+    // re-sends everything as `replayOutput` and the console swaps rather than
+    // grows. This is what makes the console rewind with the cursor (T5).
+    void outputReplaced(const QString& text);
     // The program resumed running.
     void resumed();
     // The session is ready to receive breakpoints: during Configuring (before
@@ -230,6 +283,13 @@ private:
     QString program_;
     bool stopOnEntry_ = false;
     bool replay_ = false;
+    bool timeline_ = false;
+    Timeline timeline_info_;
+    // Seek coalescing, exactly Try Turmeric's `seekPending` / `seekQueued`.
+    // -1 means "nothing queued", which is why the queued target cannot simply
+    // be an int defaulting to 0 — step 0 is a legitimate destination.
+    bool seekPending_ = false;
+    int seekQueued_ = -1;
     bool userStopped_ = false;
     int exitCode_ = -1;
     int stopCount_ = 0;

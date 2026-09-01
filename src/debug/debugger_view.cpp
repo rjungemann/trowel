@@ -1,6 +1,7 @@
 #include "debug/debugger_view.h"
 
 #include "app/icon_font.h"
+#include "debug/timeline_strip.h"
 #include "editor/theme_loader.h"
 
 #include <QAbstractItemView>
@@ -9,6 +10,7 @@
 #include <QAction>
 #include <QFileInfo>
 #include <QHeaderView>
+#include <QLabel>
 #include <QLineEdit>
 #include <QPainter>
 #include <QPlainTextEdit>
@@ -32,9 +34,6 @@ constexpr int kFrameIdRole = Qt::UserRole + 1;
 // index would be stale the moment a breakpoint above it is removed.
 constexpr int kBpPathRole = Qt::UserRole + 2;
 constexpr int kBpLineRole = Qt::UserRole + 3;
-// Marks the basename-collision warning row so the edit handlers skip it.
-constexpr int kBpWarningRole = Qt::UserRole + 4;
-
 constexpr int kBpConditionColumn = 1;
 
 // Toolbar glyph height. Matches the sidebar's, so the two icon sets read as
@@ -117,6 +116,8 @@ private:
 DebuggerView::DebuggerView(QWidget* parent)
     : QWidget(parent)
     , toolbar_(new QToolBar(this))
+    , timeline_(new TimelineStrip(this))
+    , warning_(new QLabel(this))
     , panes_(new QSplitter(Qt::Horizontal, this))
     , vsplit_(new QSplitter(Qt::Vertical, this))
     , stack_(new PlaceholderTree(QStringLiteral("No call stack.\nRun Debug Buffer to start a session."), this))
@@ -198,6 +199,21 @@ DebuggerView::DebuggerView(QWidget* parent)
     connect(stopAction_, &QAction::triggered, this, &DebuggerView::stopRequested);
 
     layout->addWidget(toolbar_);
+    layout->addWidget(timeline_);
+    timeline_->setVisible(false);
+
+    // Caveats go in a banner, not in the breakpoints list.
+    //
+    // The basename-collision warning used to be a row in that list — same
+    // column, same indentation, distinguished only by a small glyph and a
+    // colour, and elided in the middle to "two open…d util.tur", which reads
+    // like a filename. The first question anyone asked was why some
+    // breakpoints had checkboxes and some did not. They did not: one of them
+    // was not a breakpoint. Now every row in that list is one.
+    warning_->setWordWrap(true);
+    warning_->setContentsMargins(8, 4, 8, 4);
+    warning_->setVisible(false);
+    layout->addWidget(warning_);
 
     // Call stack: two columns rather than one padded string. `fn` and
     // `file:line` are different kinds of fact and want to align down their own
@@ -242,7 +258,6 @@ DebuggerView::DebuggerView(QWidget* parent)
     connect(breakpoints_, &QTreeWidget::itemChanged, this,
             [this](QTreeWidgetItem* item, int column) {
                 if (!item) return;
-                if (item->data(0, kBpWarningRole).toBool()) return;
                 const QString path = item->data(0, kBpPathRole).toString();
                 const int line = item->data(0, kBpLineRole).toInt();
                 if (path.isEmpty() || line < 1) return;
@@ -259,7 +274,6 @@ DebuggerView::DebuggerView(QWidget* parent)
                 // Double-clicking the condition column starts an edit; only
                 // the location column means "take me there".
                 if (!item || column == kBpConditionColumn) return;
-                if (item->data(0, kBpWarningRole).toBool()) return;
                 const QString path = item->data(0, kBpPathRole).toString();
                 const int line = item->data(0, kBpLineRole).toInt();
                 if (!path.isEmpty() && line >= 1) emit breakpointActivated(path, line);
@@ -268,7 +282,7 @@ DebuggerView::DebuggerView(QWidget* parent)
     auto* removeBp = new QAction(QStringLiteral("Remove Breakpoint"), breakpoints_);
     connect(removeBp, &QAction::triggered, this, [this] {
         QTreeWidgetItem* item = breakpoints_->currentItem();
-        if (!item || item->data(0, kBpWarningRole).toBool()) return;
+        if (!item) return;
         const QString path = item->data(0, kBpPathRole).toString();
         const int line = item->data(0, kBpLineRole).toInt();
         if (!path.isEmpty() && line >= 1) emit breakpointRemoved(path, line);
@@ -335,13 +349,13 @@ void DebuggerView::restyleIcons() {
     if (stepActions_.size() < 7 || !stopAction_) return;
     // Disabled actions are drawn by the style at reduced opacity, so one
     // colour is enough — the icons do not need a second, dimmer rasterization.
-    stepActions_[0]->setIcon(NerdIcon(NF::Play, kIconSize, accent_));
+    stepActions_[0]->setIcon(NerdIcon(NF::DebugContinue, kIconSize, accent_));
     stepActions_[1]->setIcon(NerdIcon(NF::DebugStepOver, kIconSize, accent_));
     stepActions_[2]->setIcon(NerdIcon(NF::DebugStepInto, kIconSize, accent_));
     stepActions_[3]->setIcon(NerdIcon(NF::DebugStepOut, kIconSize, accent_));
-    stepActions_[4]->setIcon(NerdIcon(NF::Rewind, kIconSize, accent_));
-    stepActions_[5]->setIcon(NerdIcon(NF::StepBackward, kIconSize, accent_));
-    stepActions_[6]->setIcon(NerdIcon(NF::SkipPrevious, kIconSize, accent_));
+    stepActions_[4]->setIcon(NerdIcon(NF::DebugReverseContinue, kIconSize, accent_));
+    stepActions_[5]->setIcon(NerdIcon(NF::Rewind, kIconSize, accent_));
+    stepActions_[6]->setIcon(NerdIcon(NF::DebugStepBack, kIconSize, accent_));
     stopAction_->setIcon(NerdIcon(NF::Stop, kIconSize, accent_));
 }
 
@@ -401,10 +415,25 @@ QScrollBar::add-page, QScrollBar::sub-page { background: %1; }
 QScrollBar::corner { background: %1; border: none; }
 )").arg(bg, fg, dim, sel, rule, hover, headerBg, accent_.name()));
 
+    warning_->setStyleSheet(QStringLiteral(
+        "QLabel { color: %1; background: %2; border-bottom: 1px solid %3; }")
+        .arg(accent_.name(), Mix(theme.editorBg, accent_, 0.10).name(),
+             Mix(theme.editorBg, theme.editorFg, 0.12).name()));
     for (PlaceholderTree* t : {stack_, variables_, breakpoints_}) {
         t->setPlaceholderColor(dim_);
     }
     restyleIcons();
+    if (timeline_) timeline_->applyTheme(theme);
+}
+
+void DebuggerView::setTimelineVisible(bool visible) {
+    timeline_->setVisible(visible);
+}
+
+void DebuggerView::setOutput(const QString& text) {
+    console_->setPlainText(text);
+    console_->moveCursor(QTextCursor::End);
+    console_->ensureCursorVisible();
 }
 
 void DebuggerView::appendOutput(const QString& text) {
@@ -476,18 +505,14 @@ void DebuggerView::setBreakpoints(const QVector<BreakpointModel::Breakpoint>& bp
     const QSignalBlocker blocker(breakpoints_);
     breakpoints_->clear();
 
-    for (const QString& name : collidingBasenames) {
-        auto* warn = new QTreeWidgetItem(breakpoints_);
-        warn->setText(0, QStringLiteral("⚠ two open files named %1").arg(name));
-        warn->setText(kBpConditionColumn,
-                      QStringLiteral("binds to both"));
-        warn->setData(0, kBpWarningRole, true);
-        warn->setFlags(Qt::ItemIsEnabled);  // not selectable, not checkable
-        warn->setForeground(0, accent_);
-        warn->setToolTip(0, QStringLiteral(
-            "`tur dap` reduces a breakpoint's path to its basename before "
-            "binding it, so these two files share one breakpoint set inside "
-            "the interpreter."));
+    if (collidingBasenames.isEmpty()) {
+        warning_->setVisible(false);
+    } else {
+        warning_->setText(QStringLiteral(
+            "⚠ Two open files are named %1. `tur dap` matches breakpoints by "
+            "basename, so a breakpoint in one binds in both.")
+            .arg(collidingBasenames.join(QStringLiteral(", "))));
+        warning_->setVisible(true);
     }
 
     for (const BreakpointModel::Breakpoint& b : bps) {

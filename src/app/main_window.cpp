@@ -10,6 +10,7 @@
 #include "debug/breakpoint_model.h"
 #include "debug/debug_session.h"
 #include "debug/debugger_view.h"
+#include "debug/timeline_strip.h"
 #include "editor/editor_view.h"
 #include "editor/theme_loader.h"
 #include "lsp/lsp_manager.h"
@@ -1637,6 +1638,7 @@ void MainWindow::startDebugSession(bool replay) {
         debug_ = nullptr;
     }
 
+    timelineSitesLoaded_ = false;
     debug_ = new DebugSession(this);
     connect(debug_, &DebugSession::outputReceived, this, [this](const QString& text) {
         // Stream debuggee output into the Debugger tab's console.
@@ -1660,6 +1662,12 @@ void MainWindow::startDebugSession(bool replay) {
         // not ours: reverse execution needs a recording, and `evaluate` needs a
         // live frame. Saying so once, up front, beats an error per keystroke.
         dv->setReverseAvailable(replay);
+        // The scrubber appears only once the adapter has confirmed it serves
+        // the timeline — which it does on `initialize`, after this runs. Hidden
+        // until then.
+        dv->setTimelineVisible(false);
+        connect(dv->timeline(), &TimelineStrip::seekRequested,
+                debug_, &DebugSession::seek);
         dv->setEvaluateEnabled(
             !replay,
             QStringLiteral("Evaluate is unavailable in a recording — "
@@ -1687,6 +1695,43 @@ void MainWindow::startDebugSession(bool replay) {
     connect(debug_, &DebugSession::variablesUpdated, this, [this] {
         if (!debug_ || !replPane_ || !replPane_->debugger()) return;
         replPane_->debugger()->setVariables(debug_->variables());
+    });
+    connect(debug_, &DebugSession::timelineUpdated, this, [this] {
+        if (!debug_ || !replPane_ || !replPane_->debugger()) return;
+        auto* dv = replPane_->debugger();
+        const bool live = debug_->isReplay() && debug_->hasTimeline();
+        dv->setTimelineVisible(live);
+        if (!live) return;
+        dv->timeline()->setTimeline(debug_->timeline());
+        // The ribbon is the whole recording's shape, so it only has to be
+        // fetched once per session — not once per seek.
+        if (!timelineSitesLoaded_) {
+            timelineSitesLoaded_ = true;
+            auto* view = dv;
+            debug_->requestSites(96, [view](const QVector<DebugSession::Site>& s) {
+                view->timeline()->setSites(s);
+            });
+        }
+    });
+    // The site readout is driven from `framesUpdated`, NOT from
+    // `timelineUpdated`. `refreshTimeline` is issued before `refreshFrames` in
+    // `onStopped`, so reading `frames()` there gets the *previous* stop's top
+    // frame — measured: the strip read `main tl.tur:4` while the stack showed
+    // `work:2`. Same class of mistake as the one that made `stopped` fire
+    // early, and the same fix: read the data where it is known to be current.
+    connect(debug_, &DebugSession::framesUpdated, this, [this] {
+        if (!debug_ || !replPane_ || !replPane_->debugger()) return;
+        auto* dv = replPane_->debugger();
+        if (!debug_->isReplay() || !debug_->hasTimeline()) return;
+        const auto& frames = debug_->frames();
+        if (frames.isEmpty()) { dv->timeline()->setSite({}, {}, 0); return; }
+        const auto& f = frames.first();
+        dv->timeline()->setSite(f.name, QFileInfo(f.filePath).fileName(), f.line);
+    });
+    // A backwards seek shortens the transcript; the console swaps rather than
+    // grows. This is T5 — the console rewinds with the cursor.
+    connect(debug_, &DebugSession::outputReplaced, this, [this](const QString& text) {
+        if (replPane_ && replPane_->debugger()) replPane_->debugger()->setOutput(text);
     });
     connect(debug_, &DebugSession::pushBreakpointsRequested, this,
             &MainWindow::pushBreakpointsToSession);

@@ -191,3 +191,47 @@ def test_restart_recovers(trowel, fixture_files: Path):
     trowel.call("editor.set_text", {"text": "(def still broken (\n"})
     r = trowel.call("wait.diagnostics", {"min_count": 1, "timeout_ms": WAIT_MS})
     assert r["count"] >= 1
+
+
+def test_completion_list_with_a_question_mark_name_does_not_abort(
+        trowel, fixture_files: Path, tmp_path):
+    """A `?`-suffixed predicate in the completion list must not kill the app.
+
+    Scintilla's default autocomplete *type* separator is '?', and Turmeric
+    spells predicates `empty?` / `nil?` / `zero?` by convention.
+    `ListBoxImpl::SetList` splits each item at that separator and calls
+    `Append(word, atoi(rest))`; a bare trailing '?' makes that `atoi("")` == 0,
+    and `Append` then asserts `images.contains(0)` against a map Trowel never
+    registers into. Typing `(` in such a buffer aborted the debug build
+    outright (SIGABRT), and silently reserved a phantom icon in release.
+
+    The assertion here is simply that the process is still answering: a crash
+    takes the control socket with it, so any later call fails.
+    """
+    _require_server(trowel)
+    prog = tmp_path / "predicates.tur"
+    prog.write_text(
+        "(defn empty? [n : int] : int\n"
+        "  (if (< n 1) 1 0))\n"
+        "\n"
+        "(defn main [] : int\n"
+        "  (empty? 0))\n")
+    _open_and_analyze(trowel, prog)
+
+    text = trowel.call("editor.get_text")["text"]
+    trowel.call("editor.set_cursor", {"pos": len(text.encode("utf-8"))})
+    trowel.type("\n(empt")
+
+    # `lsp.completions` deliberately does NOT reproduce this: it calls the
+    # manager and returns labels, never building Scintilla's list box. Only a
+    # path that reaches `showCompletions` -> `autoCShow` can. Complete Symbol
+    # is that path, and invoking it is the whole test.
+    trowel.call("menu.invoke", {"path": ["Run", "Complete Symbol"]})
+
+    # Still answering. A crash takes the control socket with it, so this call
+    # raises BrokenPipeError rather than failing an assert — which is exactly
+    # what it did before the fix.
+    import time
+    time.sleep(0.5)
+    assert trowel.call("lsp.status")["enabled"] is True
+    assert trowel.call("editor.get_text")["text"].endswith("(empt")

@@ -7,6 +7,7 @@
 #include <QVector>
 #include <QWidget>
 
+class QLabel;
 class QLineEdit;
 class QPlainTextEdit;
 class QSplitter;
@@ -26,6 +27,7 @@ struct Theme;
 // slots, so it needs no moc. Held by concrete type rather than as QTreeWidget*
 // precisely because it has no Q_OBJECT and therefore cannot be qobject_cast.
 class PlaceholderTree;
+class TimelineStrip;
 
 // The Debugger tab's contents: a stepping toolbar, the call stack, variables
 // and breakpoints panes, and a read-only output console with an evaluate line.
@@ -42,6 +44,18 @@ public:
     // user's own theme file styles the debugger without having to know the
     // debugger exists.
     void applyTheme(const Theme& theme);
+
+    // The time-travel scrubber. Hidden unless a replay session is running
+    // against a `tur` that advertises the timeline extension — a scrubber for
+    // a recording that does not exist is not a disabled control, it is a lie
+    // about what this session can do.
+    TimelineStrip* timeline() const { return timeline_; }
+    void setTimelineVisible(bool visible);
+
+    // Replace the console outright, for a backwards seek. `appendOutput` grows
+    // it; this swaps it, which is what makes the console rewind with the
+    // cursor (T5).
+    void setOutput(const QString& text);
 
     // Append a chunk of debuggee output (from a DAP `output` event).
     void appendOutput(const QString& text);
@@ -112,6 +126,8 @@ private:
     void restyleIcons();
 
     QToolBar* toolbar_;
+    TimelineStrip* timeline_;
+    QLabel* warning_;
     QSplitter* panes_;
     QSplitter* vsplit_;
     PlaceholderTree* stack_;

@@ -366,6 +366,26 @@ void EditorView::applyDefaultStyling() {
     sci_->indicSetFore(diag::kErrorIndicator, 0x0000CC);
     sci_->indicSetFore(diag::kWarningIndicator, 0x00A0D0);
 
+    // Scintilla's default autocomplete *type* separator is '?', and a Turmeric
+    // predicate is spelled `empty?` / `nil?` / `zero?` by convention.
+    // `ListBoxImpl::SetList` splits each item at that separator and calls
+    // `Append(word, atoi(rest))`; for a bare trailing '?' that is `atoi("")`
+    // == 0, and `Append` then does `Q_ASSERT(images.contains(0))` against a map
+    // nothing ever registers into — Trowel never calls RegisterImage.
+    //
+    // So typing `(` in a buffer whose completions include any `?`-suffixed name
+    // aborted the debug build outright. Release only escaped it because
+    // Q_ASSERT compiles out; it still reserved icon space for an image that
+    // does not exist. Measured against the vendored Scintilla, PlatQt.cpp:1113.
+    //
+    // Set once here rather than beside each `autoCSetSeparator` call: it is a
+    // persistent setting, and all four list paths (completions, outline,
+    // references chooser, symbol list) can carry a name with a '?' in it.
+    //
+    // \x01 rather than a printable byte, because every printable byte is legal
+    // somewhere in a lisp identifier.
+    sci_->autoCSetTypeSeparator('\x01');
+
     // The active bracket-pair guide: one straight line under the enclosing
     // expression. Its colour is set per update from the pair's own depth style,
     // so only the shape is configured here.

@@ -95,6 +95,8 @@ add_library(trowel_lib STATIC
     src/debug/breakpoint_model.h
     src/debug/debug_session.cpp
     src/debug/debug_session.h
+    src/debug/timeline_strip.cpp
+    src/debug/timeline_strip.h
     src/debug/debugger_view.cpp
     src/debug/debugger_view.h
     ${TROWEL_RESOURCES}

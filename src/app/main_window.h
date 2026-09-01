@@ -331,6 +331,9 @@ private:
     ReplSession* repl_ = nullptr;
     DebugSession* debug_ = nullptr;
     BreakpointModel* breakpoints_ = nullptr;
+    // The depth ribbon describes the whole recording, so its sites are
+    // fetched once per session rather than on every seek.
+    bool timelineSitesLoaded_ = false;
     bool debugStopOnEntry_ = false;
     QSplitter* splitter_ = nullptr;
     QMenu* recentMenu_ = nullptr;
