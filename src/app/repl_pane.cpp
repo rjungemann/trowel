@@ -36,6 +36,12 @@ ReplPane::ReplPane(TerminalView* terminal, QWidget* parent)
     // bottom-mounted), so it reads as the pane's footer rather than the
     // content's header.
     const Theme theme = LoadBuiltinDarkTheme();
+    // The debugger derives its whole palette from the same theme rather than
+    // carrying its own keys, so a user theme styles it without knowing it
+    // exists. Without this it rendered in Qt's defaults — near-white column
+    // headers on an empty pane, the highest-contrast thing on screen labelling
+    // nothing.
+    if (debugger_) debugger_->applyTheme(theme);
     tabs_->setTabs({QStringLiteral("REPL"), QStringLiteral("Debugger")}, 0);
     tabs_->setClosable(0, false);
     tabs_->setClosable(1, false);

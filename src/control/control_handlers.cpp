@@ -27,6 +27,7 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QMetaObject>
+#include <QPixmap>
 #include <QPointer>
 #include <QRegularExpression>
 #include <QSplitter>
@@ -279,6 +280,27 @@ void HandleMenuInvoke(MainWindow* w, const QJsonObject& args, const Reply& reply
     if (!a->isEnabled()) { ReplyErr(reply, "action_disabled", "menu action is disabled"); return; }
     a->trigger();
     reply(Ok(), nullptr);
+}
+
+void HandleWindowScreenshot(MainWindow* w, const QJsonObject& args, const Reply& reply) {
+    // Render the window to a PNG. Qt's own `grab()` rather than a platform
+    // screen capture: it needs no screen-recording permission, it captures the
+    // window even when it is not frontmost, and it works under the offscreen
+    // platform plugin the smoke tests run with — so a UI change can be looked
+    // at rather than only asserted about. Shipping UI without ever seeing it
+    // is how it comes to look the way it does.
+    const QString path = args.value("path").toString();
+    if (path.isEmpty()) { ReplyErr(reply, "bad_args", "missing `path`"); return; }
+    const QPixmap shot = w->grab();
+    if (shot.isNull() || !shot.save(path, "PNG")) {
+        ReplyErr(reply, "capture_failed", QString("could not write %1").arg(path));
+        return;
+    }
+    QJsonObject o;
+    o["path"] = path;
+    o["width"] = shot.width();
+    o["height"] = shot.height();
+    reply(o, nullptr);
 }
 
 void HandleEditorOpen(MainWindow* w, const QJsonObject& args, const Reply& reply) {
@@ -1425,6 +1447,7 @@ void Dispatch(WindowManager* windows, QPointer<ControlConnection> conn,
     if (cmd == "window.geometry")      { HandleWindowGeometry(w, args, reply); return; }
     if (cmd == "window.set_splitter")  { HandleWindowSetSplitter(w, args, reply); return; }
     if (cmd == "menu.invoke")          { HandleMenuInvoke(w, args, reply); return; }
+    if (cmd == "window.screenshot")    { HandleWindowScreenshot(w, args, reply); return; }
 
     if (cmd == "editor.open")          { HandleEditorOpen(w, args, reply); return; }
     if (cmd == "editor.save")          { HandleEditorSave(w, args, reply); return; }

@@ -572,3 +572,28 @@ def test_restart_respawns_the_same_program(trowel, fixture_files: Path):
         trowel.call("debug.stop")
     finally:
         prog.unlink(missing_ok=True)
+
+
+# --- The debugger's appearance -------------------------------------------
+
+def test_screenshot_captures_the_window(trowel, fixture_files: Path, tmp_path):
+    """`window.screenshot` renders the window to a PNG.
+
+    This exists so UI work can be *looked at* rather than only asserted about.
+    The debugger shipped its first version styled in Qt's defaults — near-white
+    column headers on empty panes, bright scrollbars under every one — because
+    nothing in the loop ever rendered it.
+    """
+    _open(trowel, fixture_files / "trace_trivial.tur")
+    out = tmp_path / "shot.png"
+    r = trowel.call("window.screenshot", {"path": str(out)})
+    assert out.exists() and out.stat().st_size > 0
+    assert r["width"] > 0 and r["height"] > 0
+    # A PNG, not an empty file with a hopeful name.
+    assert out.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_screenshot_needs_a_path(trowel):
+    with pytest.raises(ControlError) as exc:
+        trowel.call("window.screenshot")
+    assert exc.value.code == "bad_args"

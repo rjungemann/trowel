@@ -7,9 +7,7 @@
 #include <QVector>
 #include <QWidget>
 
-class QLabel;
 class QLineEdit;
-class QListWidget;
 class QPlainTextEdit;
 class QSplitter;
 class QToolBar;
@@ -17,14 +15,33 @@ class QTreeWidget;
 
 namespace trowel {
 
-// The Debugger tab's contents: a stepping toolbar, the call stack and
-// variables panes, and a read-only output console with an evaluate line.
+struct Theme;
+
+// A QTreeWidget that paints centred, dimmed text when it has no rows, instead
+// of being an empty box — three blank rectangles is what this pane looked like
+// before any session had run, and a blank rectangle is indistinguishable from
+// a broken one. Qt has no placeholder for item views.
+//
+// Defined in the .cpp, like `BracketGuideOverlay`: it declares no signals or
+// slots, so it needs no moc. Held by concrete type rather than as QTreeWidget*
+// precisely because it has no Q_OBJECT and therefore cannot be qobject_cast.
+class PlaceholderTree;
+
+// The Debugger tab's contents: a stepping toolbar, the call stack, variables
+// and breakpoints panes, and a read-only output console with an evaluate line.
 // Lives in the REPL pane (not the editor stack), so it is a plain QWidget,
 // not a TabContent.
 class DebuggerView : public QWidget {
     Q_OBJECT
 public:
     explicit DebuggerView(QWidget* parent = nullptr);
+
+    // Restyle from the editor theme. Everything here is *derived* rather than
+    // read from new theme keys — headers from the line-number colour, accents
+    // from the matched-brace colour, rules from the editor background — so a
+    // user's own theme file styles the debugger without having to know the
+    // debugger exists.
+    void applyTheme(const Theme& theme);
 
     // Append a chunk of debuggee output (from a DAP `output` event).
     void appendOutput(const QString& text);
@@ -90,14 +107,16 @@ signals:
     void breakpointRemoved(const QString& path, int line);
 
 private:
+    // Re-derive the toolbar icons in the current accent colour. Icons are
+    // rasterized per colour, so this runs on every theme change.
+    void restyleIcons();
+
     QToolBar* toolbar_;
     QSplitter* panes_;
-    QListWidget* stack_;
-    QTreeWidget* variables_;
-    QTreeWidget* breakpoints_;
-    // Set while setBreakpoints is rebuilding the panel, so the check-state and
-    // edit handlers can tell a programmatic change from a user's click.
-    bool rebuildingBreakpoints_ = false;
+    QSplitter* vsplit_;
+    PlaceholderTree* stack_;
+    PlaceholderTree* variables_;
+    PlaceholderTree* breakpoints_;
     QPlainTextEdit* console_;
     QLineEdit* evalInput_;
     // Actions kept by hand rather than read back off the toolbar by index:
@@ -109,6 +128,8 @@ private:
     // Whether this session can evaluate at all, independent of whether it is
     // paused right now. False in a recording: there is no live frame.
     bool evaluateAllowed_ = true;
+    QColor accent_;
+    QColor dim_;
 };
 
 }
