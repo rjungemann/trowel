@@ -80,3 +80,30 @@ def test_enter_does_not_auto_indent_plain_turmeric(trowel, tmp_path):
     trowel.press("Return")
     trowel.type("x")
     assert trowel.call("editor.get_text")["text"] == "(def outer\n  1)\nx\n"
+
+
+def test_typing_a_bare_caret_does_not_hang(trowel, tmp_path):
+    """`^` starts a Turmeric symbol but does not continue one.
+
+    `IsSymbolStart` accepts `^`; `IsSymbolCont` does not. So a bare `^` entered
+    the scanner's identifier branch, the inner `while` ran zero times, a
+    zero-length token was emitted and `continue` went round with the cursor
+    unmoved — an infinite loop on the UI thread. Typing `^` and pausing before
+    the `m` of `^mut` was enough to wedge the whole app.
+
+    Found by the fuzzer, not by hand. Pinned here as well because a hang is
+    slow and noisy to diagnose through a random walk, and this is the two-line
+    version.
+    """
+    prog = tmp_path / "caret.tur"
+    prog.write_text("(defn main [] : int 0)\n")
+    trowel.call("editor.open", {"path": str(prog)})
+    trowel.call("editor.set_cursor", {"pos": 0})
+
+    for text in ("^", "^^", "^ ", "^)", "^mut"):
+        trowel.type(text)
+        # Answering at all is the assertion: the loop hung the thread that
+        # services this socket, so a wedge shows up as a timeout here.
+        assert trowel.call("ping")["pong"] is True
+
+    assert "^" in trowel.call("editor.get_text")["text"]

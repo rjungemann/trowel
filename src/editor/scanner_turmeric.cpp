@@ -479,6 +479,16 @@ void ScanTurmeric(const ScanInput& in, LexState& st, Emitter& out, bool sweet) {
         if (IsSymbolStart(static_cast<unsigned char>(c))) {
             const Sci_Position start = i;
             while (i < end && IsSymbolCont(static_cast<unsigned char>(text[i]))) ++i;
+            // Guarantee progress. `IsSymbolStart` and `IsSymbolCont` are two
+            // separate lists and they do not agree: `^` starts a symbol but
+            // does not continue one, so a bare `^` matched the branch, consumed
+            // zero characters, emitted a zero-length token and `continue`d with
+            // `i` unchanged — an infinite loop that hung the whole UI thread.
+            //
+            // Typing `^` and pausing before the `m` of `^mut` was enough. The
+            // guard is on the invariant rather than on the character, because
+            // any future divergence between the two lists is the same bug.
+            if (i == start) ++i;
             const std::string_view sym(text + start, static_cast<size_t>(i - start));
             TurStyle s = SymbolStyle(sym);
             if (s == TurStyle::Identifier && i < end && text[i] == '(') {
