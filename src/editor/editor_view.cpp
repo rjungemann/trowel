@@ -894,7 +894,14 @@ void EditorView::showRenameInput(const LspRange& range, const QString& placehold
 void EditorView::hideRenameInput() {
     if (!renameInput_ || !renameInput_->isVisible()) return;
     renameInput_->hide();
-    sci_->setFocus(Qt::OtherFocusReason);
+    // Qualified, and it has to be: ScintillaEdit declares `setFocus(bool)` —
+    // the SCI_SETFOCUS API — which hides every QWidget::setFocus overload.
+    // Unqualified, `Qt::OtherFocusReason` converts to `true` and this becomes
+    // SCI_SETFOCUS, flipping Scintilla's internal flag while Qt keyboard focus
+    // stays on the rename box that was just hidden. GCC catches the conversion
+    // (-Werror=int-in-bool-context) and broke the v0.2.0 Linux release build;
+    // clang compiled it silently, which is how it shipped.
+    sci_->QWidget::setFocus(Qt::OtherFocusReason);
 }
 
 bool EditorView::renameInputVisible() const {
