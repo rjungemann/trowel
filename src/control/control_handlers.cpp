@@ -238,7 +238,17 @@ void HandleWindowDrop(MainWindow* w, const QJsonObject& args, const Reply& reply
     reply(o, nullptr);
 }
 
-void HandleWindowGeometry(MainWindow* w, const QJsonObject&, const Reply& reply) {
+void HandleWindowGeometry(MainWindow* w, const QJsonObject& args, const Reply& reply) {
+    // Optionally *set* first, then report. Read-only until now, which quietly
+    // ignored a `{"width": ...}` and made it impossible to test that a resize
+    // survives a restart — the exact thing that turned out to be broken.
+    if (args.contains("width") || args.contains("height")) {
+        w->resize(args.value("width").toInt(w->width()),
+                  args.value("height").toInt(w->height()));
+    }
+    if (args.contains("x") || args.contains("y")) {
+        w->move(args.value("x").toInt(w->x()), args.value("y").toInt(w->y()));
+    }
     QJsonObject o;
     const QRect g = w->geometry();
     o["x"] = g.x(); o["y"] = g.y(); o["w"] = g.width(); o["h"] = g.height();

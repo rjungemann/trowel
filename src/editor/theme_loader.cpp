@@ -228,7 +228,7 @@ Theme LoadBuiltinDarkTheme() {
     const QJsonObject dbg = root.value("debugger").toObject();
     t.debugBreakpoint         = parseColor(dbg.value("breakpoint"),          QColor("#D48B1C"));
     t.debugBreakpointDisabled = parseColor(dbg.value("breakpointDisabled"), QColor("#7A6A55"));
-    t.debugCurrentLine        = parseColor(dbg.value("currentLine"),         QColor("#D48B1C33"));
+    t.debugCurrentLine        = parseColor(dbg.value("currentLine"),         QColor("#E5484D"));
 
     // Falls back to the selection colour at a lower alpha, so a theme file
     // written before occurrence highlighting existed still gets a sane wash
@@ -326,6 +326,9 @@ void ApplyThemeToEditor(ScintillaEdit* sci, const Theme& theme) {
     sci->markerSetBack(dbg::kBreakpointMarker, bgra(theme.debugBreakpoint));
     sci->markerSetFore(dbg::kBreakpointDisabledMarker, bgra(theme.debugBreakpointDisabled));
     sci->markerSetBack(dbg::kBreakpointDisabledMarker, bgra(theme.editorBg));
+    // A filled dot where the program is stopped; a hollow one for a frame the
+    // user has merely selected. Distinct in hue from the amber breakpoint so
+    // the two read apart at a glance even though they sit in adjacent margins.
     sci->markerSetFore(dbg::kCurrentLineMarker, bgra(theme.debugCurrentLine));
     sci->markerSetBack(dbg::kCurrentLineMarker, bgra(theme.debugCurrentLine));
     sci->markerSetFore(dbg::kSelectedFrameMarker, bgra(theme.debugCurrentLine));

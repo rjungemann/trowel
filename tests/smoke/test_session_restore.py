@@ -80,3 +80,49 @@ def test_legacy_single_window_settings_migrate(trowel_session, fixture_files):
     text = ini.read_text()
     assert not any(line.startswith("openBuffers=") for line in text.splitlines())
     assert "[windows]" in text
+
+
+def test_closing_the_last_window_keeps_its_geometry(trowel_session):
+    """Open, resize, close, reopen — and it must still be the resized size.
+
+    `closeEvent` calls `WindowManager::forget(this)` *before* `persistAll()`,
+    so the closing window is already out of the registry when the session is
+    rewritten. With another window open that is exactly right — closing one
+    drops it. With this the *last* window, "what survives" is nothing, so
+    `persistAll` wrote a zero-length `windows` array and erased the whole
+    session on the way out: geometry, splitter, open buffers, breakpoints.
+    Every other restore test quits through File > Quit, which snapshots first,
+    so none of them covered the ordinary way a session ends.
+
+    The size is kept well inside the offscreen platform's virtual screen.
+    Qt's `restoreGeometry` clamps to the available screen, so asking for
+    1040x660 here comes back 798 wide and looks like a restore failure when it
+    is a screen-fit one.
+    """
+    t = trowel_session.launch()
+    t.call("window.geometry", {"width": 760, "height": 560})
+    t.call("window.set_splitter", {"sizes": [500, 260]})
+    before = t.call("window.geometry")
+    assert (before["w"], before["h"]) == (760, 560), before
+
+    # Close the one and only window. Not File > Quit — that path snapshots
+    # first and is already covered above.
+    t.call("menu.invoke", {"path": ["File", "Close Window"]})
+
+    t2 = trowel_session.launch()
+    after = t2.call("window.geometry")
+    assert (after["w"], after["h"]) == (760, 560), after
+    # The splitter is part of the same session blob, so it rides along.
+    assert after["splitter"] == before["splitter"], (before, after)
+
+
+def test_closing_the_last_window_keeps_its_tabs(trowel_session, fixture_files):
+    """The same erasure took the open buffers with it."""
+    hello = fixture_files / "hello.tur"
+    t = trowel_session.launch([str(hello)])
+    assert t.call("window.list")["windows"][0]["tabs"] == [str(hello)]
+
+    t.call("menu.invoke", {"path": ["File", "Close Window"]})
+
+    t2 = trowel_session.launch()
+    assert tab_sets(t2) == [[str(hello)]]

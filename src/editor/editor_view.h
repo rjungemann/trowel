@@ -71,6 +71,16 @@ constexpr int kBreakpointDisabledMarker = 3;
 constexpr int kCurrentLineMarker = 4;
 constexpr int kSelectedFrameMarker = 5;
 constexpr int kBreakpointMargin = 3;
+// The execution marker gets its own margin, not a share of the breakpoint's.
+// Scintilla stacks every marker a margin accepts at one spot, so the two drew
+// through each other on exactly the line you care about — the one you set a
+// breakpoint on and then stopped at.
+//
+// Margin 2 is Scintilla's conventional fold margin, which this editor sets to
+// width 0 and never populates (nothing calls setFold*). Reusing it costs one
+// margin's width instead of two. If folding is ever turned on, this needs its
+// own index and `SC_MAX_MARGIN` is 4.
+constexpr int kExecMargin = 2;
 }
 
 class EditorView : public TabContent {

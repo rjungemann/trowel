@@ -98,7 +98,6 @@ private:
 namespace {
 constexpr int kLineNumberMargin = 0;
 constexpr int kSymbolMargin = 1;
-constexpr int kFoldMargin = 2;
 
 // User-list identities. Scintilla hands the list type back with the selection,
 // which is how an outline pick is told apart from a placeholder row nobody
@@ -334,7 +333,13 @@ void EditorView::applyDefaultStyling() {
     sci_->setMarginWidthN(kSymbolMargin, 12);
     sci_->setMarginMaskN(kSymbolMargin,
                          (1 << diag::kErrorMarker) | (1 << diag::kWarningMarker));
-    sci_->setMarginWidthN(kFoldMargin, 0);
+    // Folding is not enabled, so margin 2 carries the execution marker
+    // instead — see dbg::kExecMargin.
+    sci_->setMarginTypeN(dbg::kExecMargin, SC_MARGIN_SYMBOL);
+    sci_->setMarginWidthN(dbg::kExecMargin, 12);
+    sci_->setMarginMaskN(dbg::kExecMargin,
+                         (1 << dbg::kCurrentLineMarker) |
+                         (1 << dbg::kSelectedFrameMarker));
 
     // Dedicated breakpoint margin: a separate click target so toggling a
     // breakpoint does not steal clicks from the diagnostic symbol margin, and
@@ -342,11 +347,14 @@ void EditorView::applyDefaultStyling() {
     // arrive on ScintillaEditBase::marginClicked.
     sci_->setMarginTypeN(dbg::kBreakpointMargin, SC_MARGIN_SYMBOL);
     sci_->setMarginWidthN(dbg::kBreakpointMargin, 14);
+    // Breakpoint markers only. The execution-line markers deliberately stay
+    // OUT of this mask: Scintilla stacks every marker a margin accepts at the
+    // same spot, so an arrow here drew straight through the breakpoint dot on
+    // any line carrying both — which is the normal case, since you stop where
+    // you set a breakpoint.
     sci_->setMarginMaskN(dbg::kBreakpointMargin,
                          (1 << dbg::kBreakpointMarker) |
-                         (1 << dbg::kBreakpointDisabledMarker) |
-                         (1 << dbg::kCurrentLineMarker) |
-                         (1 << dbg::kSelectedFrameMarker));
+                         (1 << dbg::kBreakpointDisabledMarker));
     sci_->setMarginSensitiveN(dbg::kBreakpointMargin, true);
 
     sci_->markerDefine(diag::kErrorMarker, SC_MARK_CIRCLE);
@@ -357,8 +365,16 @@ void EditorView::applyDefaultStyling() {
     // frame gets a hollow arrow so it reads as "looking at" rather than "at".
     sci_->markerDefine(dbg::kBreakpointMarker, SC_MARK_CIRCLE);
     sci_->markerDefine(dbg::kBreakpointDisabledMarker, SC_MARK_CIRCLE);
-    sci_->markerDefine(dbg::kCurrentLineMarker, SC_MARK_SHORTARROW);
-    sci_->markerDefine(dbg::kSelectedFrameMarker, SC_MARK_ARROW);
+    // A dot, in its own margin. SC_MARK_BACKGROUND was tried first and drew
+    // nothing at all: sampling the rendered pixels on the stopped line came
+    // back #0C0A08 — the untouched editor background — even with the tint set
+    // to opaque magenta. A dot in a margin uses exactly the mechanism the
+    // breakpoint marker already proves works.
+    //
+    // Hollow for a frame you are only *looking at*, filled for the one the
+    // program is actually stopped in.
+    sci_->markerDefine(dbg::kCurrentLineMarker, SC_MARK_CIRCLE);
+    sci_->markerDefine(dbg::kSelectedFrameMarker, SC_MARK_CIRCLE);
     sci_->indicSetStyle(diag::kErrorIndicator, INDIC_SQUIGGLE);
     sci_->indicSetStyle(diag::kWarningIndicator, INDIC_SQUIGGLE);
     // Colors come from the theme; these are visible fallbacks for a theme that

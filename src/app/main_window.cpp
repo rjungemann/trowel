@@ -189,7 +189,20 @@ void MainWindow::setupUi() {
     resize(1200, 800);
     setAcceptDrops(true);
 
+    // Hidden until something is actually being said, and hidden again the
+    // moment it stops. 33 call sites do `statusBar()->show()` before a timed
+    // `showMessage`, and nothing put it back — so the first transient message
+    // of a session left an empty bar wedged across the bottom of the window
+    // for the rest of it.
+    //
+    // `messageChanged` fires with an empty string both when a timed message
+    // expires and when one is cleared, which is exactly the condition.
+    statusBar()->setSizeGripEnabled(false);
     statusBar()->hide();
+    connect(statusBar(), &QStatusBar::messageChanged, this,
+            [this](const QString& text) {
+        if (text.isEmpty()) statusBar()->hide();
+    });
 
     connect(tabBar_, &TabBar::activateRequested, this, [this](int idx) {
         activateBuffer(idx);
@@ -2577,7 +2590,16 @@ void MainWindow::closeEvent(QCloseEvent* event) {
         // survives. During a quit we skip this: quitApp() already snapshotted
         // the full set, and rewriting per close would erase it window by
         // window until nothing was left to restore.
-        if (!windows_->isQuitting()) windows_->persistAll();
+        //
+        // Except when this was the *last* window: `forget` has already removed
+        // it, so "what survives" is nothing and persistAll would write an empty
+        // session — losing geometry, splitter, tabs and breakpoints. Closing
+        // the last window is how a session ordinarily ends, so its state *is*
+        // the session.
+        if (!windows_->isQuitting()) {
+            if (windows_->count() == 0) windows_->persistClosing(this);
+            else windows_->persistAll();
+        }
     }
     event->accept();
 }

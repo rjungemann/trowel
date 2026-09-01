@@ -62,6 +62,16 @@ public:
     // Write the current window set to settings, replacing what was there.
     void persistAll();
 
+    // Persist `w`'s state as the whole session, for a window that is closing.
+    //
+    // `persistAll` writes the windows still in the registry, and `closeEvent`
+    // has already left it by the time it runs — correct when others remain
+    // (closing a window drops it), and destructive when this is the last one,
+    // where it wrote a zero-length array and erased geometry, splitter, open
+    // buffers and breakpoints on the way out. Closing the last window is the
+    // ordinary way to end a session, not a request to forget it.
+    void persistClosing(MainWindow* w);
+
     // True between the start of a quit and its completion (or cancellation).
     // Window closes skip their usual "rewrite the surviving set" step while
     // this holds, so a quit preserves the set it snapshotted up front.

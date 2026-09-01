@@ -119,6 +119,21 @@ void WindowManager::persistAll() {
     RemoveLegacyKeys(s);
 }
 
+void WindowManager::persistClosing(MainWindow* w) {
+    if (!w) return;
+    QSettings s;
+    s.remove("windows");
+    s.beginWriteArray("windows", 1);
+    s.setArrayIndex(0);
+    const QVariantMap state = w->sessionState();
+    for (auto it = state.constBegin(); it != state.constEnd(); ++it) {
+        s.setValue(it.key(), it.value());
+    }
+    s.endArray();
+    s.setValue("focusedWindow", 0);
+    RemoveLegacyKeys(s);
+}
+
 MainWindow* WindowManager::restoreAll() {
     QSettings s;
     QList<QVariantMap> states;

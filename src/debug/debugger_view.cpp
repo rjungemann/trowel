@@ -71,13 +71,18 @@ public:
 // default size, and a content-sized first column pushed "Location" off the
 // edge -- the header read "Locati" and every pane grew a bright scrollbar
 // underneath. The user can still drag the divider.
-void configureColumns(QTreeWidget* tree, int stretchColumn, int fixedWidth) {
+void configureColumns(QTreeWidget* tree, int stretchColumn, int fixedWidth,
+                      Qt::Alignment lastColumnAlign = Qt::AlignLeft) {
     QHeaderView* h = tree->header();
     const int fixed = stretchColumn == 0 ? 1 : 0;
     h->setSectionResizeMode(stretchColumn, QHeaderView::Stretch);
     h->setSectionResizeMode(fixed, QHeaderView::Interactive);
     h->setStretchLastSection(stretchColumn == 1);
-    h->setDefaultAlignment(Qt::AlignLeft);
+    h->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    // A header aligned against its own column's contents is worse than no
+    // header: "Line" sat hard left over right-aligned numbers, so the label
+    // and the values it named pointed at opposite edges.
+    tree->headerItem()->setTextAlignment(1, lastColumnAlign | Qt::AlignVCenter);
     tree->setColumnWidth(fixed, fixedWidth);
     // Elide rather than scroll. A path or a rendered value is routinely wider
     // than the pane, and the full text is already in the tooltip.
@@ -223,7 +228,8 @@ DebuggerView::DebuggerView(QWidget* parent)
     stack_->setRootIsDecorated(false);
     stack_->setFrameShape(QFrame::NoFrame);
     stack_->setUniformRowHeights(true);
-    configureColumns(stack_, /*stretch=*/0, /*fixedWidth=*/52);
+    configureColumns(stack_, /*stretch=*/0, /*fixedWidth=*/52,
+                     /*lastColumnAlign=*/Qt::AlignRight);
     connect(stack_, &QTreeWidget::currentItemChanged, this,
             [this](QTreeWidgetItem* item, QTreeWidgetItem*) {
                 if (!item) return;
@@ -400,6 +406,15 @@ QTreeWidget::item { padding: 2px 4px; border: none; }
 QTreeWidget::item:selected { background: %4; color: %8; }
 QTreeWidget::item:selected:active { background: %4; color: %8; }
 QTreeWidget::item:hover:!selected { background: %6; }
+/* The platform checkbox is a blue macOS control when checked and, on a
+   near-black background, invisible when not — so a disabled breakpoint read as
+   a row that simply had no checkbox, which is exactly how it was reported.
+   Both states are drawn here, in the theme's own colours, at a fixed size so
+   the column's text starts at the same x either way. */
+QTreeWidget::indicator { width: 12px; height: 12px; border-radius: 3px;
+    border: 1px solid %3; background: %1; margin-left: 2px; }
+QTreeWidget::indicator:unchecked:hover { border-color: %8; }
+QTreeWidget::indicator:checked { background: %8; border-color: %8; }
 QHeaderView::section { background: %7; color: %3; border: none;
     border-bottom: 1px solid %5; padding: 3px 6px; font-weight: normal; }
 QSplitter::handle { background: %5; }
