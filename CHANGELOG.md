@@ -6,7 +6,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 <!-- New releases are inserted immediately below this comment. -->
 
-## [0.2.0] -- 2026-09-01
+## [0.2.1] -- 2026-09-01
+
+Supersedes v0.2.0, which was withdrawn: its Linux AppImage jobs failed to
+build, so it shipped for macOS only, and Run Buffer did not actually run the
+program. Everything v0.2.0 contained is listed here.
 
 ### Added
 - **Debugger** -- `F5` runs the current buffer under `tur dap`, in a sibling tab to the REPL: breakpoints (`F9`, or click the gutter) including conditional ones, stepping, call stack, variables, and in-frame evaluation. Breakpoints follow their line as you edit and survive into the restored session.
@@ -20,6 +24,27 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Bundled Turmeric v0.42.2** -- updated the embedded `tur` compiler/REPL from v0.33.2. Brings the replay-timeline DAP extension (`replayInfo`/`replaySeek`/`replaySites`) that Trowel's scrubber is built on, per-expression trace recording (`.turtrace` v2) in place of line-granular recording, and Justfile parity for `tur run`.
 
 ### Fixed
+- **Run Buffer never ran the program** -- it evaluated the file with `load`,
+  which runs the top-level forms and stops. A program shaped the way Turmeric
+  programs are shaped -- a `defn main` and little else at the top level --
+  therefore defined `main`, printed `=> #<fn main>`, and never executed, while
+  Run Buffer reported success. It now uses the REPL's own `:run`, which
+  evaluates the file and then invokes `main`. A script of bare top-level forms
+  behaves exactly as before. Sweet-expression buffers (`.tur.sweet`, `.sweet`)
+  are unchanged for now: `:run` is broken upstream for a non-default reader,
+  so a sweet program that defines `main` still will not invoke it.
+- **The gutter was four margins wide** -- diagnostics, breakpoints, and the
+  execution marker had each been given their own column as they were added,
+  putting 82px of gutter beside every line before a character of code. They
+  now share one, and the line-number margin is measured from the digits the
+  buffer actually has rather than fixed at five. Stopping on a breakpoint
+  draws one dot carrying both states -- the breakpoint's amber ring around the
+  execution marker's red centre -- instead of two dots in two columns.
+- **No Linux build in v0.2.0** -- `ScintillaEdit::setFocus(bool)` hides
+  `QWidget::setFocus`, so restoring focus after a rename passed a focus-reason
+  enum into a bool. GCC rejects that under `-Werror`, which failed both
+  AppImage jobs; clang compiled it silently. Focus now returns to the editor
+  properly, and the Linux artifacts build again.
 - **Hang on typing a bare `^`** -- the Turmeric scanner's symbol-start and symbol-continue sets disagreed, so `^` alone consumed no characters and looped forever on the UI thread. Typing `^` and pausing before the `m` of `^mut` was enough to freeze the app. Found by a new fuzz suite.
 - **Window state lost when closing the last window** -- the close path forgot the window and then persisted "everything that survives", which by then was nothing, writing an empty session. Geometry, splitter position, tabs, and breakpoints are now snapshotted from the closing window.
 - **Empty status bar wedged across the window** -- showing the bar for a timed message never hid it again, so the first transient message of a session left a blank strip along the bottom for the rest of it.

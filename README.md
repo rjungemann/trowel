@@ -5,7 +5,7 @@ programming language, for macOS and Linux.
 
 <img src="docs/images/screenshot.png" alt="Trowel editing a Turmeric source file" width="400">
 
-**Latest release:** `v0.2.0` — a full debugger with time-travel replay, LSP navigation and scope-aware rename, and Turmeric v0.42.2.
+**Latest release:** `v0.2.1` — a full debugger with time-travel replay, LSP navigation and scope-aware rename, and Turmeric v0.42.2.
 
 ## Install
 
