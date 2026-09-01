@@ -43,6 +43,23 @@ constexpr int kErrorMarker = 0;
 constexpr int kWarningMarker = 1;
 }
 
+// The margins, in the order they are painted left of the text.
+//
+// Two, not four. Margin 0 is the line numbers, sized to the digits the buffer
+// actually has; margin 1 carries every symbol marker there is. Margins 2 and 3
+// exist only because Scintilla always has four — both are held at width 0, and
+// margin 2 stays free for folding should it ever be turned on.
+namespace margins {
+constexpr int kLineNumber = 0;
+constexpr int kGutter = 1;
+// Width of the symbol gutter, in logical pixels. One marker is drawn per line
+// and a 12px circle is the largest that reads cleanly at Menlo 12, so this is
+// that plus a pixel of breathing room on each side.
+constexpr int kGutterWidth = 14;
+// Padding added to the measured width of the widest line number.
+constexpr int kLineNumberPadding = 10;
+}
+
 // Occurrence highlighting takes the next free slot above the diagnostics.
 //
 // A translucent box, never a squiggle: an occurrence is not a problem and must
@@ -61,26 +78,34 @@ namespace bracketguide {
 constexpr int kIndicator = 12;
 }
 
-// Debugger markers. Markers 0-1 are diagnostics, 25-31 are folding, so 2-6 are
-// free. The breakpoint margin is a dedicated margin (kBreakpointMargin = 3)
-// so click-to-toggle does not steal clicks from the diagnostic symbol margin,
-// and the two decorations stop competing for 12px.
+// Debugger markers. Markers 0-1 are diagnostics, 25-31 are folding, so 2-7 are
+// free.
+//
+// Every symbol marker — diagnostic, breakpoint, execution — shares ONE margin
+// (kGutterMargin). The previous arrangement gave each its own, which put three
+// symbol columns beside the line numbers and made the gutter 82px wide before
+// a single character of code. Three columns to say at most three things about
+// a line, when a line is one thing.
+//
+// Sharing a margin means Scintilla would stack them at the same spot, drawing
+// one through another. That is solved by precedence rather than by more
+// margins: refreshGutterMarkers() picks exactly one marker per line. See it
+// for the order.
 namespace dbg {
 constexpr int kBreakpointMarker = 2;
 constexpr int kBreakpointDisabledMarker = 3;
 constexpr int kCurrentLineMarker = 4;
 constexpr int kSelectedFrameMarker = 5;
-constexpr int kBreakpointMargin = 3;
-// The execution marker gets its own margin, not a share of the breakpoint's.
-// Scintilla stacks every marker a margin accepts at one spot, so the two drew
-// through each other on exactly the line you care about — the one you set a
-// breakpoint on and then stopped at.
-//
-// Margin 2 is Scintilla's conventional fold margin, which this editor sets to
-// width 0 and never populates (nothing calls setFold*). Reusing it costs one
-// margin's width instead of two. If folding is ever turned on, this needs its
-// own index and `SC_MAX_MARGIN` is 4.
-constexpr int kExecMargin = 2;
+// Stopped on a line that also carries a breakpoint — the normal case, since
+// you stop where you set one. A composite rather than a choice between the
+// two: SC_MARK_CIRCLE draws `fore` as the ring and `back` as the fill, so this
+// is the breakpoint's amber ring around the execution marker's red centre, and
+// neither piece of state is hidden by the other.
+constexpr int kBreakpointStoppedMarker = 6;
+// The same, for a breakpoint drawn hollow (disabled or not yet verified): the
+// ring takes the dim colour so "stopped here" does not silently promote a
+// disabled breakpoint into an enabled-looking one.
+constexpr int kBreakpointDisabledStoppedMarker = 7;
 }
 
 class EditorView : public TabContent {
@@ -174,6 +199,10 @@ public:
     // selected-frame marker (visually distinct). Reveals the line.
     void setExecutionLine(int line, bool isTopFrame);
     void clearExecutionLine();
+    // Size the line-number margin to the digits this buffer actually has.
+    // Called whenever the line count can have changed; cheap, and a no-op when
+    // the width is already right.
+    void updateLineNumberWidth();
 
     // Show an LSP completion list. Labels are sorted here rather than by the
     // caller — Scintilla requires a sorted list unless told otherwise.
@@ -365,6 +394,20 @@ private:
         int line = 0;  // 1-based, as last reconciled
     };
     QVector<BreakpointHandle> bpHandles_;
+    // The breakpoints and execution position this buffer was last told about.
+    // Held because the markers now share one margin: what to draw on a line is
+    // a function of all of them together, so each setter records its own input
+    // and re-derives the whole gutter rather than painting its own marker and
+    // hoping the others do not collide with it.
+    QVector<BreakpointMark> bpMarks_;
+    int execLine_ = 0;  // 1-based; 0 for "not stopped"
+    bool execIsTopFrame_ = false;
+    // Repaint every symbol marker in the shared gutter from bpMarks_,
+    // execLine_, and diagnostics_. One marker per line, by precedence.
+    void refreshGutterMarkers();
+    // Last width applied to the line-number margin, so updateLineNumberWidth()
+    // can skip the Scintilla call when nothing changed.
+    int lineNumberWidth_ = -1;
     // Reposition the vertical overlay from guideOpener_/guideCloser_.
     void repositionBracketGuideOverlay();
     // The span the guide currently occupies, so the control API can read back

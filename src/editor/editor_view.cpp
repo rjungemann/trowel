@@ -10,6 +10,8 @@
 #include <QFileInfo>
 #include <QFont>
 #include <QFontInfo>
+#include <QHash>
+#include <QSet>
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QPainter>
@@ -96,9 +98,6 @@ private:
 };
 
 namespace {
-constexpr int kLineNumberMargin = 0;
-constexpr int kSymbolMargin = 1;
-
 // User-list identities. Scintilla hands the list type back with the selection,
 // which is how an outline pick is told apart from a placeholder row nobody
 // should be able to act on.
@@ -194,6 +193,9 @@ EditorView::EditorView(QWidget* parent)
         // fires; this is where the model is told, so a breakpoint set on a
         // line that has since slid down still means the same statement.
         reconcileBreakpointLines();
+        // An edit can cross a power of ten and change how many digits the
+        // widest line number needs.
+        updateLineNumberWidth();
         emit contentChanged(docVersion_);
     });
 
@@ -220,7 +222,7 @@ EditorView::EditorView(QWidget* parent)
     // +1 for the 1-based line the model and DAP use.
     connect(sci_, &ScintillaEditBase::marginClicked, this,
             [this](Scintilla::Position position, Scintilla::KeyMod, int margin) {
-                if (margin != dbg::kBreakpointMargin) return;
+                if (margin != margins::kGutter) return;
                 const int line = int(sci_->lineFromPosition(int(position))) + 1;
                 emit breakpointToggleRequested(line);
             });
@@ -325,37 +327,32 @@ void EditorView::applyDefaultStyling() {
     sci_->styleSetSize(STYLE_DEFAULT, 12);
     sci_->styleClearAll();
 
-    sci_->setMarginTypeN(kLineNumberMargin, SC_MARGIN_NUMBER);
-    sci_->setMarginWidthN(kLineNumberMargin, 44);
-    // The symbol margin carries diagnostic markers. It stays narrow rather than
-    // hidden so lines don't shift horizontally the moment an error appears.
-    sci_->setMarginTypeN(kSymbolMargin, SC_MARGIN_SYMBOL);
-    sci_->setMarginWidthN(kSymbolMargin, 12);
-    sci_->setMarginMaskN(kSymbolMargin,
-                         (1 << diag::kErrorMarker) | (1 << diag::kWarningMarker));
-    // Folding is not enabled, so margin 2 carries the execution marker
-    // instead — see dbg::kExecMargin.
-    sci_->setMarginTypeN(dbg::kExecMargin, SC_MARGIN_SYMBOL);
-    sci_->setMarginWidthN(dbg::kExecMargin, 12);
-    sci_->setMarginMaskN(dbg::kExecMargin,
-                         (1 << dbg::kCurrentLineMarker) |
-                         (1 << dbg::kSelectedFrameMarker));
+    sci_->setMarginTypeN(margins::kLineNumber, SC_MARGIN_NUMBER);
+    updateLineNumberWidth();
 
-    // Dedicated breakpoint margin: a separate click target so toggling a
-    // breakpoint does not steal clicks from the diagnostic symbol margin, and
-    // the two decorations stop competing for 12px. Sensitive to clicks, which
-    // arrive on ScintillaEditBase::marginClicked.
-    sci_->setMarginTypeN(dbg::kBreakpointMargin, SC_MARGIN_SYMBOL);
-    sci_->setMarginWidthN(dbg::kBreakpointMargin, 14);
-    // Breakpoint markers only. The execution-line markers deliberately stay
-    // OUT of this mask: Scintilla stacks every marker a margin accepts at the
-    // same spot, so an arrow here drew straight through the breakpoint dot on
-    // any line carrying both — which is the normal case, since you stop where
-    // you set a breakpoint.
-    sci_->setMarginMaskN(dbg::kBreakpointMargin,
+    // One symbol gutter for everything: diagnostics, breakpoints, and the
+    // execution marker. Always present rather than shown on demand, so lines
+    // do not shift horizontally the moment an error appears or a debug session
+    // starts. Sensitive to clicks, which arrive on
+    // ScintillaEditBase::marginClicked — clicking it toggles a breakpoint.
+    sci_->setMarginTypeN(margins::kGutter, SC_MARGIN_SYMBOL);
+    sci_->setMarginWidthN(margins::kGutter, margins::kGutterWidth);
+    sci_->setMarginMaskN(margins::kGutter,
+                         (1 << diag::kErrorMarker) |
+                         (1 << diag::kWarningMarker) |
                          (1 << dbg::kBreakpointMarker) |
-                         (1 << dbg::kBreakpointDisabledMarker));
-    sci_->setMarginSensitiveN(dbg::kBreakpointMargin, true);
+                         (1 << dbg::kBreakpointDisabledMarker) |
+                         (1 << dbg::kCurrentLineMarker) |
+                         (1 << dbg::kSelectedFrameMarker) |
+                         (1 << dbg::kBreakpointStoppedMarker) |
+                         (1 << dbg::kBreakpointDisabledStoppedMarker));
+    sci_->setMarginSensitiveN(margins::kGutter, true);
+
+    // The remaining two margins are held at zero. Scintilla always has four;
+    // this editor wants two. Margin 2 is the conventional fold margin and is
+    // left free for that.
+    sci_->setMarginWidthN(2, 0);
+    sci_->setMarginWidthN(3, 0);
 
     sci_->markerDefine(diag::kErrorMarker, SC_MARK_CIRCLE);
     sci_->markerDefine(diag::kWarningMarker, SC_MARK_CIRCLE);
@@ -375,6 +372,11 @@ void EditorView::applyDefaultStyling() {
     // program is actually stopped in.
     sci_->markerDefine(dbg::kCurrentLineMarker, SC_MARK_CIRCLE);
     sci_->markerDefine(dbg::kSelectedFrameMarker, SC_MARK_CIRCLE);
+    // Stopped on a breakpoint. Same circle; the ring and the fill carry
+    // different colours (set in the theme loader) so one dot says both things
+    // rather than two dots in two margins saying one each.
+    sci_->markerDefine(dbg::kBreakpointStoppedMarker, SC_MARK_CIRCLE);
+    sci_->markerDefine(dbg::kBreakpointDisabledStoppedMarker, SC_MARK_CIRCLE);
     sci_->indicSetStyle(diag::kErrorIndicator, INDIC_SQUIGGLE);
     sci_->indicSetStyle(diag::kWarningIndicator, INDIC_SQUIGGLE);
     // Colors come from the theme; these are visible fallbacks for a theme that
@@ -663,6 +665,10 @@ void EditorView::setDiagnostics(const QVector<LspDiagnostic>& diagnostics) {
     diagnostics_ = diagnostics;
     clearDiagnosticDecorations();
 
+    // Squiggles are per-range and never collide with anything, so they are
+    // still painted here. The gutter dot is not: it shares a margin now, so it
+    // is refreshGutterMarkers() that decides whether this line's dot is the
+    // diagnostic's or something with a stronger claim.
     for (const LspDiagnostic& d : diagnostics_) {
         const bool isError = d.severity <= LspDiagnostic::Error;
         const auto [start, end] = rangeForDiagnostic(d);
@@ -670,32 +676,111 @@ void EditorView::setDiagnostics(const QVector<LspDiagnostic>& diagnostics) {
 
         sci_->setIndicatorCurrent(isError ? diag::kErrorIndicator : diag::kWarningIndicator);
         sci_->indicatorFillRange(start, end - start);
-        sci_->markerAdd(sci_->lineFromPosition(start),
-                        isError ? diag::kErrorMarker : diag::kWarningMarker);
     }
+    refreshGutterMarkers();
 }
 
 void EditorView::setBreakpointMarkers(const QVector<BreakpointMark>& marks) {
-    // Clear only the breakpoint markers, leaving diagnostics untouched.
-    sci_->markerDeleteAll(dbg::kBreakpointMarker);
-    sci_->markerDeleteAll(dbg::kBreakpointDisabledMarker);
+    bpMarks_ = marks;
+    refreshGutterMarkers();
+}
+
+// One marker per line, chosen by precedence:
+//
+//   1. stopped here AND a breakpoint  -> the composite (ring + fill)
+//   2. stopped here                   -> the execution marker
+//   3. a breakpoint                   -> the breakpoint marker
+//   4. an error, else a warning       -> the diagnostic marker
+//
+// Execution outranks a breakpoint because it is transient and answers "where
+// am I", which is the question you have while it is true. A breakpoint
+// outranks a diagnostic because you put it there deliberately, and because a
+// diagnostic is not only in the gutter — the squiggle under the text says it
+// too, so losing the dot on a breakpoint line loses no information.
+void EditorView::refreshGutterMarkers() {
+    for (int m : {diag::kErrorMarker, diag::kWarningMarker,
+                  dbg::kBreakpointMarker, dbg::kBreakpointDisabledMarker,
+                  dbg::kCurrentLineMarker, dbg::kSelectedFrameMarker,
+                  dbg::kBreakpointStoppedMarker,
+                  dbg::kBreakpointDisabledStoppedMarker}) {
+        sci_->markerDeleteAll(m);
+    }
+
+    // Which lines the diagnostics claim, weakest precedence, computed first so
+    // the stronger passes can simply overwrite the entry.
+    QHash<int, int> markerForLine;  // 0-based line -> marker number
+    for (const LspDiagnostic& d : diagnostics_) {
+        const auto [start, end] = rangeForDiagnostic(d);
+        if (end <= start) continue;
+        const int line0 = static_cast<int>(sci_->lineFromPosition(start));
+        const bool isError = d.severity <= LspDiagnostic::Error;
+        // An error on a line already claimed by a warning wins; the reverse
+        // does not.
+        auto it = markerForLine.find(line0);
+        if (it != markerForLine.end() && !isError) continue;
+        markerForLine[line0] = isError ? diag::kErrorMarker : diag::kWarningMarker;
+    }
+
+    const int execLine0 = execLine_ >= 1 ? execLine_ - 1 : -1;
+
+    // Breakpoints, which also need their handles recorded for edit tracking.
     bpHandles_.clear();
-    for (const BreakpointMark& m : marks) {
+    QSet<int> breakpointLines;
+    for (const BreakpointMark& m : bpMarks_) {
         if (m.line < 1) continue;
         const int line0 = m.line - 1;
         // Pending (not yet verified) and disabled both render hollow — the
         // delay is visible rather than mysterious (constraint 6).
         const bool hollow = !m.enabled || m.pending;
+        int marker;
+        if (line0 == execLine0) {
+            marker = hollow ? dbg::kBreakpointDisabledStoppedMarker
+                            : dbg::kBreakpointStoppedMarker;
+        } else {
+            marker = hollow ? dbg::kBreakpointDisabledMarker
+                            : dbg::kBreakpointMarker;
+        }
+        markerForLine[line0] = marker;
+        breakpointLines.insert(line0);
+    }
+
+    // The execution marker, only where no breakpoint already folded it into a
+    // composite above.
+    if (execLine0 >= 0 && !breakpointLines.contains(execLine0)) {
+        markerForLine[execLine0] = execIsTopFrame_ ? dbg::kCurrentLineMarker
+                                                   : dbg::kSelectedFrameMarker;
+    }
+
+    for (auto it = markerForLine.constBegin(); it != markerForLine.constEnd(); ++it) {
+        const int handle = static_cast<int>(sci_->markerAdd(it.key(), it.value()));
         // `markerAdd` returns a handle Scintilla carries across insertions and
         // deletions. Keeping the handle beside the line is what makes a
         // breakpoint follow its statement when a line is inserted above it;
-        // storing a bare line number and hoping is the classic bug.
-        const int handle = static_cast<int>(
-            sci_->markerAdd(line0, hollow ? dbg::kBreakpointDisabledMarker
-                                          : dbg::kBreakpointMarker));
+        // storing a bare line number and hoping is the classic bug. Only
+        // breakpoint lines need tracking — a diagnostic is replaced wholesale
+        // on the next analysis, and an execution position on the next stop.
         if (handle < 0) continue;  // Scintilla refused (out of range)
-        bpHandles_.append({handle, m.line});
+        if (breakpointLines.contains(it.key())) {
+            bpHandles_.append({handle, it.key() + 1});
+        }
     }
+}
+
+void EditorView::updateLineNumberWidth() {
+    // Measure the widest number this buffer can actually show, rather than
+    // reserving a fixed slab. The old value was a flat 44px — room for five
+    // digits, in an editor whose files are mostly three, and it never changed.
+    //
+    // `textWidth` measures in the line-number style, so this follows the theme
+    // font and any future zoom rather than assuming Menlo 12.
+    const int lines = qMax(1, static_cast<int>(sci_->lineCount()));
+    const QByteArray widest(QByteArray::number(lines).size(), '9');
+    const int width =
+        static_cast<int>(sci_->textWidth(STYLE_LINENUMBER, widest.constData())) +
+        margins::kLineNumberPadding;
+    if (width == lineNumberWidth_) return;  // the common case, per keystroke
+    lineNumberWidth_ = width;
+    sci_->setMarginWidthN(margins::kLineNumber, width);
 }
 
 void EditorView::reconcileBreakpointLines() {
@@ -725,19 +810,23 @@ void EditorView::reconcileBreakpointLines() {
 }
 
 void EditorView::setExecutionLine(int line, bool isTopFrame) {
-    clearExecutionLine();
-    if (line < 1) return;
-    const int line0 = line - 1;
-    sci_->markerAdd(line0, isTopFrame ? dbg::kCurrentLineMarker
-                                      : dbg::kSelectedFrameMarker);
+    if (line < 1) {
+        clearExecutionLine();
+        return;
+    }
+    execLine_ = line;
+    execIsTopFrame_ = isTopFrame;
+    refreshGutterMarkers();
     // Reveal the line. gotoLine ensures it is visible without forcing it to
     // the top, which a stepper would fight against.
-    sci_->gotoLine(line0);
+    sci_->gotoLine(line - 1);
 }
 
 void EditorView::clearExecutionLine() {
-    sci_->markerDeleteAll(dbg::kCurrentLineMarker);
-    sci_->markerDeleteAll(dbg::kSelectedFrameMarker);
+    if (execLine_ == 0) return;
+    execLine_ = 0;
+    execIsTopFrame_ = false;
+    refreshGutterMarkers();
 }
 
 void EditorView::clearOccurrences() {

@@ -315,7 +315,7 @@ void ApplyThemeToEditor(ScintillaEdit* sci, const Theme& theme) {
     sci->markerSetBack(diag::kErrorMarker, bgra(theme.diagnosticError));
     sci->markerSetFore(diag::kWarningMarker, bgra(theme.diagnosticWarning));
     sci->markerSetBack(diag::kWarningMarker, bgra(theme.diagnosticWarning));
-    sci->setMarginBackN(1, bgra(theme.editorBg));
+    sci->setMarginBackN(margins::kGutter, bgra(theme.editorBg));
 
     // Debugger gutter markers. The breakpoint marker is a filled circle
     // (fore = fill, back = editor bg so it reads as a dot, not a block); the
@@ -333,7 +333,17 @@ void ApplyThemeToEditor(ScintillaEdit* sci, const Theme& theme) {
     sci->markerSetBack(dbg::kCurrentLineMarker, bgra(theme.debugCurrentLine));
     sci->markerSetFore(dbg::kSelectedFrameMarker, bgra(theme.debugCurrentLine));
     sci->markerSetBack(dbg::kSelectedFrameMarker, bgra(theme.editorBg));
-    sci->setMarginBackN(dbg::kBreakpointMargin, bgra(theme.editorBg));
+    // Stopped on a breakpoint: one dot carrying both states, since they share
+    // a margin. `fore` is the ring — the breakpoint's own colour, dim when the
+    // breakpoint is disabled or pending — and `back` is the fill, the
+    // execution marker's red. Reading outward: where the program is, sitting
+    // inside the thing that stopped it.
+    sci->markerSetFore(dbg::kBreakpointStoppedMarker, bgra(theme.debugBreakpoint));
+    sci->markerSetBack(dbg::kBreakpointStoppedMarker, bgra(theme.debugCurrentLine));
+    sci->markerSetFore(dbg::kBreakpointDisabledStoppedMarker,
+                       bgra(theme.debugBreakpointDisabled));
+    sci->markerSetBack(dbg::kBreakpointDisabledStoppedMarker,
+                       bgra(theme.debugCurrentLine));
 
     // Occurrences: a translucent rounded box under the text, not a squiggle.
     // Painted under the text so the syntax colours stay on top and readable.
