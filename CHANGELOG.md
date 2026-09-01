@@ -6,6 +6,24 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 <!-- New releases are inserted immediately below this comment. -->
 
+## [0.2.0] -- 2026-09-01
+
+### Added
+- **Debugger** -- `F5` runs the current buffer under `tur dap`, in a sibling tab to the REPL: breakpoints (`F9`, or click the gutter) including conditional ones, stepping, call stack, variables, and in-frame evaluation. Breakpoints follow their line as you edit and survive into the restored session.
+- **Time-travel debugging** -- `Ctrl+F5` records the run first, then steps it in both directions. A timeline strip scrubs the whole recording -- slider, first/back/forward/last, a `file:line` cursor readout, and a call-depth ribbon showing where the recursion is -- and the console rewinds with it rather than showing output from steps you have stepped back past.
+- **Trace buffer** -- `Ctrl+Shift+T` records an execution trace with `tur trace` and reports its summary (steps, peak depth, size).
+- **LSP navigation** -- Go to definition (`F12`), Find references (`Shift+F12`), file outline (`Ctrl+Shift+M`), and Back/Forward (`Ctrl+Alt+-` / `Ctrl+Alt+Shift+-`) over the jump history. A definition inside the bundled stdlib opens a read-only tab marked `(ro)`, kept out of Open Recent and out of session restore.
+- **Rename symbol** (`F2`) -- scope-aware: a `let` binding or parameter changes only in its own scope, a top-level name reaches every workspace file that imports it. Affected files open as dirty tabs and are never written to disk, so one `Ctrl+Z` undoes the whole rename; Trowel asks first past 20 files.
+- **On-demand completion, docs, format, and a bracket guide** -- `Ctrl+Space` completes at the caret, `Ctrl+Shift+D` shows documentation, `Ctrl+Shift+F` formats with `tur format`, `Ctrl+Shift+K` clears the REPL, and a new **Bracket pair guide** setting underlines the expression enclosing the caret in that pair's own nesting-depth color.
+
+### Changed
+- **Bundled Turmeric v0.42.2** -- updated the embedded `tur` compiler/REPL from v0.33.2. Brings the replay-timeline DAP extension (`replayInfo`/`replaySeek`/`replaySites`) that Trowel's scrubber is built on, per-expression trace recording (`.turtrace` v2) in place of line-granular recording, and Justfile parity for `tur run`.
+
+### Fixed
+- **Hang on typing a bare `^`** -- the Turmeric scanner's symbol-start and symbol-continue sets disagreed, so `^` alone consumed no characters and looped forever on the UI thread. Typing `^` and pausing before the `m` of `^mut` was enough to freeze the app. Found by a new fuzz suite.
+- **Window state lost when closing the last window** -- the close path forgot the window and then persisted "everything that survives", which by then was nothing, writing an empty session. Geometry, splitter position, tabs, and breakpoints are now snapshotted from the closing window.
+- **Empty status bar wedged across the window** -- showing the bar for a timed message never hid it again, so the first transient message of a session left a blank strip along the bottom for the rest of it.
+
 ## [0.1.3] -- 2026-08-02
 
 ### Changed
