@@ -27,6 +27,18 @@ QString bundledTurPath() {
     const QString appDir = QCoreApplication::applicationDirPath();
 #ifdef Q_OS_MACOS
     return QDir::cleanPath(appDir + "/../Resources/turmeric/tur");
+#elif defined(Q_OS_WIN)
+    // The Windows release is a .zip in the PREFIX layout -- bin/, lib/,
+    // include/, share/turmeric/stdlib/ -- not the flat tur+stdlib the other
+    // platforms ship, so the binary is a directory deeper and carries a .exe.
+    // Verified against the published turmeric-v0.44.1-windows-x86_64.zip.
+    //
+    // Nothing reaches this today: CMakeLists.txt has no Windows entry in the
+    // prebuilt table, because Windows assets start at v0.44.1 and the pinned
+    // TROWEL_TURMERIC_VERSION is older.  Adding that key means bumping the
+    // toolchain for every platform at once, which wants its own change.  Until
+    // then ResolveTurBinary falls through to `tur` on PATH.
+    return QDir::cleanPath(appDir + "/turmeric/bin/tur.exe");
 #else
     return QDir::cleanPath(appDir + "/turmeric/tur");
 #endif
