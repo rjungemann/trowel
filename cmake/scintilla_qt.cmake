@@ -35,6 +35,19 @@ set_target_properties(scintilla_qt PROPERTIES
     POSITION_INDEPENDENT_CODE ON
 )
 
+# Scintilla's Qt headers declare their classes __declspec(dllimport) on Windows
+# unless told otherwise, which is wrong for the STATIC library built above: every
+# use from trowel_lib resolved to an __imp_ symbol that no import library
+# provides, and the link failed on ~40 undefined references to ScintillaEdit and
+# ScintillaEditBase.
+#
+# The headers guard the macro with #ifndef, so defining it empty is the supported
+# way to say "neither import nor export, this is a static build". PUBLIC because
+# consumers include those headers too and must agree.
+if(WIN32)
+    target_compile_definitions(scintilla_qt PUBLIC "EXPORT_IMPORT_API=")
+endif()
+
 target_include_directories(scintilla_qt
     PUBLIC
         ${SCI_ROOT}/include

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QObject>
+#include <QtGlobal>
 #include <QStringList>
 
 class QSocketNotifier;
@@ -34,9 +35,20 @@ private slots:
 private:
     void reap();
 
-    int master_ = -1;
     long pid_ = -1;
+#ifdef Q_OS_WIN
+    // HPCON / HANDLE, kept as void* so windows.h stays out of this header.
+    // See pty_session_win.cpp: ConPTY needs two pipes and a reader thread
+    // where the POSIX side needs one fd and a QSocketNotifier.
+    void* hpc_          = nullptr;
+    void* in_write_     = nullptr;
+    void* out_read_     = nullptr;
+    void* proc_         = nullptr;
+    void* reader_alive_ = nullptr;
+#else
+    int master_ = -1;
     QSocketNotifier* notifier_ = nullptr;
+#endif
 };
 
 }

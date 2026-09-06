@@ -75,7 +75,6 @@ add_library(trowel_lib STATIC
     src/repl/project_runner.h
     src/trace/trace_runner.cpp
     src/trace/trace_runner.h
-    src/repl/pty_session.cpp
     src/repl/pty_session.h
     src/repl/terminal_view.cpp
     src/repl/terminal_view.h
@@ -102,6 +101,15 @@ add_library(trowel_lib STATIC
     ${TROWEL_RESOURCES}
 )
 target_include_directories(trowel_lib PUBLIC src)
+# The pty backend is per-platform: forkpty on POSIX, ConPTY on Windows.
+# Two files rather than one with #ifdefs -- they share only the interface,
+# and the Windows one needs windows.h at the top of the translation unit.
+if(WIN32)
+    target_sources(trowel_lib PRIVATE src/repl/pty_session_win.cpp)
+else()
+    target_sources(trowel_lib PRIVATE src/repl/pty_session.cpp)
+endif()
+
 target_link_libraries(trowel_lib PUBLIC Qt6::Widgets Qt6::Network scintilla_qt)
 target_compile_options(trowel_lib PRIVATE
     -Wall -Wextra -Wpedantic -Werror
@@ -117,6 +125,24 @@ qt_add_executable(trowel
     ${TROWEL_APP_ICON}
 )
 target_link_libraries(trowel PRIVATE trowel_lib)
+
+# Windows: a GUI subsystem binary, not a console one.
+#
+# Two reasons, and the second is not obvious.  The visible one is that a CUI
+# binary pops a console window when launched from Explorer, behind the editor.
+#
+# The load-bearing one is the pseudo-console.  A CUI process launched from a
+# shell is handed INHERITABLE std handles, and a child created with
+# PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE picks those up in preference to the
+# pty -- so the REPL child would write to whatever launched Trowel instead of
+# to the terminal view, and the pty would carry only ConPTY's own init
+# sequences.  Measured: 16 bytes through the pty with inheritable handles
+# present, 134 bytes (program output plus cursor/clear/title escapes) with
+# them cleared.  A GUI process has NULL std handles and is in the second
+# situation by construction.  See src/repl/pty_session_win.cpp.
+if(WIN32)
+    set_target_properties(trowel PROPERTIES WIN32_EXECUTABLE TRUE)
+endif()
 
 # ---- Bundle a prebuilt Turmeric toolchain next to the editor ----------------
 # Trowel ships a pinned `tur` so a fresh install has a working REPL / run-file
