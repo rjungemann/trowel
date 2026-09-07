@@ -255,3 +255,150 @@ jobs:
             ${{ steps.pkg.outputs.path }}
             ${{ steps.pkg.outputs.path }}.sha256
           fail_on_unmatched_files: true
+
+  # Windows support merged (PR #6) and is built by ci.yml on every push -- but
+  # this workflow had no Windows job at all, so every release shipped macOS and
+  # Linux only. The port was verified and unreachable: a user on Windows could
+  # not get it.
+  #
+  # Same shape as the linux job: gated behind `macos`, which creates the
+  # GitHub Release; this only appends assets, so there is no create-vs-update
+  # race.
+  windows:
+    name: Build Windows zip (x86_64)
+    needs: macos
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ github.event.inputs.tag || github.ref_name }}
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      # Before checkout: git on Windows defaults to core.autocrlf=true, and the
+      # tree is line-ending sensitive (see the same step in ci.yml).
+      - name: Keep LF line endings
+        shell: bash
+        run: git config --global core.autocrlf input
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      # qt6-tools is what provides windeployqt6; the rest matches ci.yml.
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-qt6-base
+            mingw-w64-ucrt-x86_64-qt6-5compat
+            mingw-w64-ucrt-x86_64-qt6-tools
+            zip
+
+      - name: Configure
+        run: >-
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      # CMake stages the pinned Turmeric next to the binary as build/turmeric/,
+      # so the package picks it up with the tree below.
+      - name: Build
+        run: cmake --build build -j
+
+      # windeployqt is NECESSARY BUT NOT SUFFICIENT, and the gap is the whole
+      # reason this step is written out rather than being one command.
+      #
+      # It collects Qt's own DLLs and plugins (platforms/qwindows.dll, styles,
+      # tls, imageformats) and NOTHING ELSE. Measured on a real build of this
+      # tree: it left all 24 of the MinGW and third-party runtime DLLs behind --
+      # libgcc_s_seh-1, libstdc++-6, libwinpthread-1, the ICU trio, harfbuzz,
+      # freetype, zlib, pcre2, brotli, and the rest. A zip built from
+      # windeployqt alone launches fine on a machine with MSYS2 installed and
+      # fails on every machine without one, which is every user's machine.
+      #
+      # So walk `ldd` over everything staged and copy each dependency that
+      # lives under the UCRT64 prefix, to a fixpoint -- the Qt plugins have
+      # their own dependencies, so one pass is not enough. On the build this
+      # was developed against: pass 1 copied 28 files, pass 2 copied 0.
+      - name: Package
+        id: pkg
+        run: |
+          set -euo pipefail
+          VER="${VERSION#v}"
+          STAGE="dist/Trowel-${VER}-windows-x86_64"
+          rm -rf dist && mkdir -p "$STAGE"
+
+          cp build/trowel.exe "$STAGE/"
+          [ -d build/turmeric ] && cp -r build/turmeric "$STAGE/"
+
+          windeployqt6 --release --no-translations --dir "$STAGE" "$STAGE/trowel.exe"
+
+          for pass in 1 2 3 4 5; do
+            added=0
+            while read -r src; do
+              base=$(basename "$src")
+              if [ ! -f "$STAGE/$base" ]; then cp "$src" "$STAGE/"; added=$((added+1)); fi
+            done < <(find "$STAGE" \( -name '*.exe' -o -name '*.dll' \) \
+                     -exec ldd {} \; 2>/dev/null | awk '/ucrt64/ {print $3}' | sort -u)
+            echo "dependency pass $pass: copied $added"
+            [ "$added" -eq 0 ] && break
+          done
+
+          # Fail LOUDLY rather than shipping a zip that cannot start. Without
+          # this the job is green and the user gets "the code execution cannot
+          # proceed because libgcc_s_seh-1.dll was not found".
+          missing=0
+          while read -r f; do
+            while read -r d; do
+              if [ ! -f "$STAGE/$d" ]; then echo "::error::unstaged dependency $d (needed by $f)"; missing=1; fi
+            done < <(ldd "$f" 2>/dev/null | grep -i ucrt64 | awk '{print $1}')
+          done < <(find "$STAGE" \( -name '*.exe' -o -name '*.dll' \))
+          [ "$missing" -eq 0 ] || { echo "::error::package is not self-contained"; exit 1; }
+
+          OUT="dist/Trowel-${VER}-windows-x86_64.zip"
+          ( cd dist && zip -qr "$(basename "$OUT")" "$(basename "$STAGE")" )
+          sha256sum "$OUT" | awk '{print $1}' > "${OUT}.sha256"
+          echo "path=$OUT" >> "$GITHUB_OUTPUT"
+
+      # The check that actually matters: run the packaged binaries with MSYS2
+      # OFF the PATH, which is the environment a user has. `--version` exits
+      # before any window is created, so it works on a headless runner.
+      #
+      # In bash rather than pwsh, deliberately. `trowel.exe` is a GUI-subsystem
+      # binary; PowerShell's `&` waits on a stdout stream it never closes, and
+      # the step HANGS instead of failing -- verified locally, where it ran to
+      # the tool timeout twice while the identical command in bash printed
+      # "Trowel 0.2.1" and exited 0. A smoke test that can hang is worse than
+      # none: it burns the job's whole budget and reports nothing.
+      #
+      # `timeout` wraps `env`, not the other way round, so the wrapper is
+      # resolved BEFORE the PATH is stripped -- otherwise `timeout` resolves to
+      # Windows' own timeout.exe out of System32, which takes different
+      # arguments and fails with "Invalid syntax".
+      - name: Smoke-test the package without MSYS2 on PATH
+        run: |
+          set -euo pipefail
+          VER="${VERSION#v}"
+          STAGE="dist/Trowel-${VER}-windows-x86_64"
+          CLEAN="/c/Windows/System32:/c/Windows"
+
+          timeout 60 env PATH="$CLEAN" "./$STAGE/trowel.exe" --version
+          if [ -f "$STAGE/turmeric/bin/tur.exe" ]; then
+            timeout 60 env PATH="$CLEAN" "./$STAGE/turmeric/bin/tur.exe" --version
+          fi
+          echo "package runs standalone."
+
+      - name: Publish Windows zip to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.VERSION }}
+          files: |
+            ${{ steps.pkg.outputs.path }}
+            ${{ steps.pkg.outputs.path }}.sha256
+          fail_on_unmatched_files: true
