@@ -7,8 +7,24 @@ include(FetchContent)
 
 set(SCINTILLA_VERSION 555 CACHE STRING "Scintilla version (concatenated, e.g. 555 for 5.5.5)")
 
+# SourceForge spells the version dotted (5.5.5) where scintilla.org concatenates
+# it (555), so derive one from the other rather than keeping two pins that can
+# drift apart.
+string(REGEX REPLACE "^(.)(.)(.)$" "\\1.\\2.\\3"
+       SCINTILLA_VERSION_DOTTED "${SCINTILLA_VERSION}")
+
+# TWO urls, tried in order. www.scintilla.org intermittently answers 403 to CI
+# egress -- it took the Windows job down mid-PR having succeeded on the run
+# before -- and a build that can only be configured when one host feels like
+# answering is not a build you can rely on.
+#
+# A mirror is safe here precisely because URL_HASH is pinned: whichever host
+# answers, the bytes are verified against the same SHA-256 before anything is
+# extracted. Confirmed byte-identical from SourceForge (1802780 bytes, same
+# digest) rather than assumed.
 FetchContent_Declare(scintilla
     URL https://www.scintilla.org/scintilla${SCINTILLA_VERSION}.tgz
+        https://downloads.sourceforge.net/project/scintilla/scintilla/${SCINTILLA_VERSION_DOTTED}/scintilla${SCINTILLA_VERSION}.tgz
     URL_HASH SHA256=0941a8c309a172da9cbb2a2731f97950cb60446cb4709073f9e296e9a6d4c1ae
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
