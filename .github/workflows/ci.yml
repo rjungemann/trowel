@@ -79,6 +79,20 @@ jobs:
             mingw-w64-ucrt-x86_64-qt6-5compat
             mingw-w64-ucrt-x86_64-qt6-tools
 
+      # Two external tarballs are fetched at configure time -- Scintilla and the
+      # pinned Turmeric release -- and a run that cannot reach either cannot
+      # even configure.  www.scintilla.org has already answered 403 to a runner
+      # once, so cache what was downloaded and stop asking.
+      #
+      # Keyed on the files that carry the pins, so bumping a version or a hash
+      # invalidates the cache exactly when it should and never leaves a stale
+      # tarball behind a moved pin.
+      - name: Cache fetched dependencies
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: deps-${{ matrix.name }}-${{ hashFiles('CMakeLists.txt', 'cmake/scintilla_qt.cmake') }}
+
       # --- configure + build -------------------------------------------------
       # Explicit -S/-B rather than the Justfile presets: there is no Windows
       # preset, and CI wants one spelling across all three.
