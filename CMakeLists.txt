@@ -158,24 +158,40 @@ endif()
 # source of truth: the per-arch SHA-256s below are pinned to this exact tag, so
 # the version must not be independently overridable via -D (which would leave a
 # stale cached value pointing at mismatched hashes).
-set(TROWEL_TURMERIC_VERSION "v0.42.2")
+set(TROWEL_TURMERIC_VERSION "v0.44.2")
 
 # Select the release asset + its SHA-256 for this platform/arch. Hashes are from
 # the release's sha256sums.txt.
+#
+# `_turmeric_ext` exists because the Windows asset is a .zip where the others
+# are .tar.gz, and it ships the PREFIX layout (bin/ include/ lib/ share/) where
+# the others are flat -- so the staged tree is turmeric/bin/tur.exe on Windows
+# and turmeric/tur elsewhere, which is what bundledTurPath()
+# (src/repl/repl_session.cpp) probes for. See the turmeric-side report
+# `unify-release-archive-layout`; if those layouts are ever unified this can
+# collapse back to one shape.
 set(_turmeric_key "")
+set(_turmeric_ext "tar.gz")
 if(APPLE)
     if(CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "arm64" OR
        CMAKE_OSX_ARCHITECTURES MATCHES "arm64")
         set(_turmeric_key "macos-arm64")
-        set(_turmeric_sha "20e6099068a2222389c01d1eeeaafdb8d4e4c3dd5c89ffcda928c90108e89da0")
+        set(_turmeric_sha "336963026d822eb4f780c6238f3c7bddc738bef08ff47ad69d554e4f0ceb1336")
     endif()
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64)$")
         set(_turmeric_key "linux-x86_64")
-        set(_turmeric_sha "706979658597b39e87a8265a79d4764c23ff64226de3fba6205ec27d5fd0a623")
+        set(_turmeric_sha "0b06466250d1f91de7b807c6d5c048594211e458d78279bac4d84d8d91510470")
     elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
         set(_turmeric_key "linux-aarch64")
-        set(_turmeric_sha "94023959632e6c3a72ea902e33e3a079652810c2dd2b24a0ea9d06b91913aeb2")
+        set(_turmeric_sha "56ce4ee7beb4849beb7a3079506660aeeac6fad8ef3e14dc848525cf2ec0d734")
+    endif()
+elseif(WIN32)
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "^([Aa][Mm][Dd]64|x86_64|X86)$" OR
+       CMAKE_SIZEOF_VOID_P EQUAL 8)
+        set(_turmeric_key "windows-x86_64")
+        set(_turmeric_ext "zip")
+        set(_turmeric_sha "8879d0a5018a4771f5c2bed5feb042515a3e8e9cd46b8c2c7730c51f26761f40")
     endif()
 endif()
 
@@ -199,7 +215,7 @@ target_include_directories(trowel PRIVATE "${CMAKE_BINARY_DIR}/generated")
 if(_turmeric_key)
     include(FetchContent)
     FetchContent_Declare(turmeric_prebuilt
-        URL      "https://github.com/rjungemann/turmeric/releases/download/${TROWEL_TURMERIC_VERSION}/turmeric-${TROWEL_TURMERIC_VERSION}-${_turmeric_key}.tar.gz"
+        URL      "https://github.com/rjungemann/turmeric/releases/download/${TROWEL_TURMERIC_VERSION}/turmeric-${TROWEL_TURMERIC_VERSION}-${_turmeric_key}.${_turmeric_ext}"
         URL_HASH SHA256=${_turmeric_sha}
     )
     FetchContent_MakeAvailable(turmeric_prebuilt)
