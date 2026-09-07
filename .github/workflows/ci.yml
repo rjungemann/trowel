@@ -1,0 +1,137 @@
+name: CI
+
+# Trowel had NO build CI: the only workflow was release.yml, which runs on a
+# tag. So every change between releases was unverified, on every platform, and
+# a Windows port could sit in a branch with nothing able to tell you whether it
+# still built. This is the cheap version of that safety net -- build on all
+# three platforms on every push and PR, and run the smoke suite where it is
+# already known to work.
+#
+# The dependency lists and configure flags are lifted from release.yml rather
+# than invented, so CI and the release build cannot drift into disagreeing
+# about what Trowel needs.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            runner: ubuntu-24.04
+          - name: macOS
+            runner: macos-14
+          - name: Windows
+            runner: windows-latest
+
+    defaults:
+      run:
+        # MSYS2 on Windows so the UCRT64 Qt6 and toolchain are on PATH; the
+        # default shell elsewhere.
+        shell: ${{ matrix.name == 'Windows' && 'msys2 {0}' || 'bash' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # --- toolchain, per platform ------------------------------------------
+      - name: Install build dependencies (Linux)
+        if: matrix.name == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build g++ \
+            qt6-base-dev qt6-base-dev-tools qt6-5compat-dev libqt6core5compat6 \
+            libgl1-mesa-dev libxkbcommon-dev libedit2
+
+      - name: Install build dependencies (macOS)
+        if: matrix.name == 'macOS'
+        shell: bash
+        run: brew install cmake ninja qt@6
+
+      - name: Install build dependencies (Windows)
+        if: matrix.name == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          # Exactly the set a working local UCRT64 build uses.  qt6-5compat is
+          # not optional: the editor pulls Qt5Compat for the Scintilla widget.
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-qt6-base
+            mingw-w64-ucrt-x86_64-qt6-5compat
+            mingw-w64-ucrt-x86_64-qt6-tools
+
+      # --- configure + build -------------------------------------------------
+      # Explicit -S/-B rather than the Justfile presets: there is no Windows
+      # preset, and CI wants one spelling across all three.
+      - name: Configure
+        run: |
+          EXTRA=""
+          if [ "${{ matrix.name }}" = "macOS" ]; then
+            EXTRA="-DCMAKE_PREFIX_PATH=$(brew --prefix qt@6)"
+          fi
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug $EXTRA
+
+      # This also exercises the bundled-Turmeric fetch: CMakeLists pins a
+      # release tag plus a per-arch SHA-256, so a bad pin, a moved asset or a
+      # changed archive layout fails HERE rather than at someone's first run.
+      - name: Build
+        run: cmake --build build
+
+      - name: Report the bundled Turmeric
+        run: |
+          if [ "${{ matrix.name }}" = "Windows" ]; then
+            TUR=build/_deps/turmeric_prebuilt-src/bin/tur.exe
+          else
+            TUR=build/_deps/turmeric_prebuilt-src/tur
+          fi
+          if [ -x "$TUR" ]; then "$TUR" --version; else
+            echo "::warning::no Turmeric was bundled for ${{ matrix.name }}"
+          fi
+
+      # --- smoke suite -------------------------------------------------------
+      # Linux only, deliberately.  The suite drives a real Trowel process over
+      # a control socket, and conftest's binary resolution knows about a macOS
+      # .app bundle and a plain ELF and nothing else -- on Windows it would
+      # look for an extensionless `trowel`.  TROWEL_BIN can point it anywhere,
+      # so extending this to the other two is a conftest change, not a CI one.
+      #
+      # Stated rather than left implicit: a green Windows job here means it
+      # BUILDS, not that it runs.
+      - name: Smoke suite (Linux)
+        if: matrix.name == 'Linux'
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python3 -m venv /tmp/smoke-venv
+          /tmp/smoke-venv/bin/pip install -q pytest
+          cd tests/smoke
+          TROWEL_BIN="$GITHUB_WORKSPACE/build/trowel" \
+            /tmp/smoke-venv/bin/python -m pytest -q
+
+      - name: Upload smoke artifacts on failure
+        if: failure() && matrix.name == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-artifacts
+          path: tests/smoke/artifacts/
+          if-no-files-found: ignore
