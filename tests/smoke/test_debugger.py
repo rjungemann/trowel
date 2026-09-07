@@ -599,16 +599,22 @@ def test_screenshot_needs_a_path(trowel):
     assert exc.value.code == "bad_args"
 
 
-def test_a_top_level_file_says_the_debugger_will_not_stop(trowel, fixture_files: Path):
-    """`tur dap` instruments what `(main)` evaluates and nothing else.
+def test_a_top_level_file_stops_at_a_breakpoint(trowel, fixture_files: Path):
+    """A top-level file is debuggable — the inverse of what this used to assert.
 
-    Measured against the adapter directly: with `stopOnEntry` AND a breakpoint,
-    a top-level file gets `verified: true` back and then `output` / `exited` /
-    `terminated` with no `stopped` at all. The identical file with its body in
-    `main` stops on the first try. So a set breakpoint sits solid in the gutter
-    and can never bind, which reads as a broken debugger rather than an
-    inapplicable one. TraceRunner has carried the same rule for `tur trace`
-    since T1; this is that rule, shared.
+    It read: "`tur dap` instruments what `(main)` evaluates and nothing else",
+    and asserted that a top-level file ran to completion with `stop_count == 0`,
+    because a breakpoint could be verified and still never bind.
+
+    Turmeric v0.44.0 removed that limitation — "`tur dap` and `tur trace` now
+    instrument top-level programs, not only `(main)` ... the launch path now
+    pre-scans for a top-level `main` and arms the debugger around the file load
+    itself when there isn't one." Trowel bundles v0.44.2, so the breakpoint
+    binds and the session stops. MainWindow's matching pre-launch warning is
+    gone for the same reason.
+
+    Kept as a test rather than deleted: it is the assertion that catches the
+    bundled Turmeric being rolled back under Trowel's feet.
     """
     prog = fixture_files / "debug_toplevel.tur"
     prog.write_text('(defn use-ask [] : int 41)\n(println (use-ask))\n')
@@ -616,11 +622,10 @@ def test_a_top_level_file_says_the_debugger_will_not_stop(trowel, fixture_files:
         _open(trowel, prog)
         trowel.call("debug.breakpoint.toggle", {"path": str(prog), "line": 2})
         trowel.call("debug.start", {"stop_on_entry": True, "timeout_ms": DEBUG_MS})
-        st = _wait_state(trowel, "idle", timeout=10.0)
-        # It ran to completion without ever stopping — the behaviour the
-        # warning exists to explain.
-        assert st.get("running") is False, st
-        assert st.get("stop_count", 0) == 0, st
+        st = _wait_state(trowel, "paused", timeout=10.0)
+        assert st["state"] == "paused", st
+        assert st["stop_count"] >= 1, st
+        trowel.call("debug.stop")
     finally:
         prog.unlink(missing_ok=True)
 

@@ -1,0 +1,6 @@
+;; Top-level work with no `(defn main [] …)`.
+;;
+;; Since Turmeric v0.44.0 this IS recorded -- the tracer arms around the file
+;; load when there is no top-level main. It records few enough steps to land in
+;; the short-recording case.
+(println "no main here")
