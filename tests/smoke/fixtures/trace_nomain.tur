@@ -1,3 +1,6 @@
-;; Records 0 steps: `tur trace` records what `(main)` evaluates, and this
-;; file`s work happens at the top level.
-(println "no main here")
+;; Records 0 steps: there is nothing here to run.
+;;
+;; This fixture used to be `(println "no main here")` -- top-level work, which
+;; recorded nothing because `tur trace` only recorded what `(main)` evaluated.
+;; Turmeric v0.44.0 instruments top-level programs too, so that file now
+;; records 3 steps. A comment-only file is what still reaches the zero case.

@@ -1803,28 +1803,21 @@ void MainWindow::startDebugSession(bool replay) {
         }
     }
 
-    // `tur dap` instruments what `(main)` evaluates and nothing else, so a file
-    // whose work sits at the top level runs straight through: no entry stop, no
-    // breakpoint hits, just output and an exit. Worse, `setBreakpoints` answers
-    // `verified: true` for it, so the gutter shows a solid breakpoint that can
-    // never bind — the session looks broken rather than inapplicable.
+    // A warning used to stand here: that a file without `(defn main [] …)`
+    // would run straight through -- no entry stop, no breakpoint hits -- because
+    // `tur dap` instrumented only what `(main)` evaluated, and that a breakpoint
+    // in such a file would sit verified in the gutter and never bind.
     //
-    // Said before the process is spawned rather than inferred afterwards.
-    // `TraceRunner` has carried the same rule for `tur trace` since T1; this is
-    // that rule, shared.
-    const bool hasMain = DefinesMainEntry(v->text());
-    if (!hasMain) {
-        statusBar()->show();
-        statusBar()->showMessage(
-            breakpoints_ && !breakpoints_->forFile(v->filePath()).isEmpty()
-                ? QStringLiteral("This file's work is at the top level, so the "
-                                 "debugger will not stop — breakpoints only bind "
-                                 "inside `(defn main [] …)`.")
-                : QStringLiteral("This file's work is at the top level. It will "
-                                 "run, but the debugger only steps inside "
-                                 "`(defn main [] …)`."),
-            8000);
-    }
+    // That stopped being true in Turmeric v0.44.0: "`tur dap` and `tur trace`
+    // now instrument top-level programs, not only `(main)` ... the launch path
+    // now pre-scans for a top-level `main` and arms the debugger around the file
+    // load itself when there isn't one."  Trowel bundles v0.44.2, so breakpoints
+    // in a top-level file bind and the debugger stops.
+    //
+    // Removed rather than reworded: it told the user to restructure their
+    // program to work around a limitation that no longer exists, which is worse
+    // than saying nothing.  Measured against the bundled binary -- `tur trace`
+    // on a top-level file now records 3 steps where it recorded 0.
 
     debug_->start(v->filePath(), replWorkingDir(), extraEnv, debugStopOnEntry_, replay);
     debugStopOnEntry_ = false;  // one-shot: the menu action always runs to completion

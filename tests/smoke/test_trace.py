@@ -95,16 +95,35 @@ def test_the_same_program_spread_over_lines_records_far_more(
     assert spread["peak_depth"] > 1
 
 
-def test_a_file_with_no_main_says_so(trowel, fixture_files: Path):
-    """§5.3.2. Records nothing while still printing the program's output."""
+def test_a_file_with_nothing_to_run_says_so(trowel, fixture_files: Path):
+    """§5.3.2, narrowed: the zero-recording case is now an empty program.
+
+    This used to assert that a TOP-LEVEL program recorded nothing, because
+    `tur trace` recorded only what `(main)` evaluated. Turmeric v0.44.0
+    instruments top-level programs too, so that file records 3 steps now — see
+    test_a_top_level_file_is_recorded below. What still records zero is a file
+    with nothing in it to execute.
+    """
     r = _trace(trowel, fixture_files / "trace_nomain.tur")
 
     assert r["outcome"] == "no_main"
     assert r["steps"] == 0
     assert r["enters"] == 0
-    # The program still ran — its output was captured even though no step was.
-    assert r["output_bytes"] > 0
-    assert "main" in r["explanation"]
+    assert "nothing in this file to run" in r["explanation"]
+
+
+def test_a_top_level_file_is_recorded(trowel, fixture_files: Path):
+    """The other half of the v0.44.0 change, pinned so it cannot silently revert.
+
+    A file whose work is at the top level and which defines no `main` used to
+    record 0 steps; it is now instrumented like any other program.
+    """
+    r = _trace(trowel, fixture_files / "trace_toplevel.tur")
+
+    assert r["outcome"] != "no_main", r
+    assert r["steps"] > 0, r
+    # It still ran, and its output was captured.
+    assert r["output_bytes"] > 0, r
 
 
 def test_a_file_that_does_not_compile_reports_the_error(trowel, fixture_files: Path):

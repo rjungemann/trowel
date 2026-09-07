@@ -99,10 +99,19 @@ QString TraceRunner::ExplanationFor(TraceOutcome outcome, const TraceSummary& su
                 "This file does not compile, so nothing was recorded. "
                 "Fix the errors above and trace again.");
         case TraceOutcome::NoMain:
+            // The advice here used to be "wrap it in `(defn main [] …)`",
+            // because `tur trace` recorded only what `(main)` evaluated and a
+            // top-level program recorded nothing.  Turmeric v0.44.0 instruments
+            // top-level programs too, so that is no longer the reason for a
+            // zero recording and no longer sound advice.
+            //
+            // What still reaches this branch is a file with nothing to execute
+            // at all -- measured against the bundled v0.44.2: top-level work
+            // records 3 steps, a lone `defn` records 1, and only a comment-only
+            // file records 0.
             return QStringLiteral(
-                "Recorded 0 steps: `tur trace` records what `(main)` evaluates, "
-                "and this file's work happens at the top level. "
-                "Wrap it in `(defn main [] …)` to trace it.");
+                "Recorded 0 steps: there is nothing in this file to run. "
+                "Add an expression or a `(defn main [] …)` and trace again.");
         case TraceOutcome::ShortRecording:
             // Two genuinely different causes, and telling the user the wrong
             // one sends them somewhere useless. Under line granularity a short
