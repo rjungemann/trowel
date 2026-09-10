@@ -23,25 +23,36 @@ QString ifExecutable(const QString& path) {
 
 // Path to the bundled `tur` shipped inside Trowel.app. Empty string on dev
 // builds where no binary was staged (falls through to PATH).
+//
+// Both published archive shapes are probed, because Turmeric has shipped both.
+// The windows-x86_64 .zip has always used the PREFIX layout -- bin/, lib/,
+// include/, share/turmeric/stdlib/ -- while the three .tar.gz targets shipped
+// FLAT (`tur` and `stdlib/` at the archive root) through v0.46.0 before being
+// unified onto the prefix layout. CMake stages the fetched archive verbatim, so
+// the staged tree is whichever shape the pinned TROWEL_TURMERIC_VERSION
+// happened to publish. Accepting either is what keeps bumping that pin across
+// the change a one-line edit instead of a coordinated one. See the
+// turmeric-side report `unify-release-archive-layout`.
 QString bundledTurPath() {
     const QString appDir = QCoreApplication::applicationDirPath();
 #ifdef Q_OS_MACOS
-    return QDir::cleanPath(appDir + "/../Resources/turmeric/tur");
-#elif defined(Q_OS_WIN)
-    // The Windows release is a .zip in the PREFIX layout -- bin/, lib/,
-    // include/, share/turmeric/stdlib/ -- not the flat tur+stdlib the other
-    // platforms ship, so the binary is a directory deeper and carries a .exe.
-    // Verified against the published turmeric-v0.44.1-windows-x86_64.zip.
-    //
-    // Nothing reaches this today: CMakeLists.txt has no Windows entry in the
-    // prebuilt table, because Windows assets start at v0.44.1 and the pinned
-    // TROWEL_TURMERIC_VERSION is older.  Adding that key means bumping the
-    // toolchain for every platform at once, which wants its own change.  Until
-    // then ResolveTurBinary falls through to `tur` on PATH.
-    return QDir::cleanPath(appDir + "/turmeric/bin/tur.exe");
+    const QString root = QDir::cleanPath(appDir + "/../Resources/turmeric");
 #else
-    return QDir::cleanPath(appDir + "/turmeric/tur");
+    const QString root = QDir::cleanPath(appDir + "/turmeric");
 #endif
+#ifdef Q_OS_WIN
+    const QString exe = QStringLiteral("/tur.exe");
+#else
+    const QString exe = QStringLiteral("/tur");
+#endif
+    const QString prefixShape = QDir::cleanPath(root + "/bin" + exe);
+    if (QFileInfo::exists(prefixShape)) return prefixShape;
+    const QString flatShape = QDir::cleanPath(root + exe);
+    if (QFileInfo::exists(flatShape)) return flatShape;
+    // Nothing staged -- a dev build. Name the prefix shape: it is what a
+    // current release unpacks to, so it is the more useful of the two to print
+    // in the "could not locate tur" banner below.
+    return prefixShape;
 }
 
 // Replace a leading `home` with `~`, or return empty when it isn't a prefix.
@@ -140,9 +151,19 @@ void ReplSession::start(const QString& workingDir) {
     // toolchain) would otherwise leak in and cause a version mismatch. Only
     // override when that sibling stdlib actually exists — a bare shim without an
     // adjacent stdlib falls through to the inherited environment.
+    //
+    // Both archive shapes again: `stdlib/` sits beside the binary in the flat
+    // layout, and one level up under `share/turmeric/` in the prefix one. Miss
+    // the second and a prefix-layout bundle silently loses this pin -- which is
+    // the case the pin exists for, since it then inherits exactly the ambient
+    // TUR_STDLIB_DIR it was written to override.
     QStringList extraEnv;
-    const QString siblingStdlib =
-        QFileInfo(resolved).absolutePath() + QStringLiteral("/stdlib");
+    const QString turDir = QFileInfo(resolved).absolutePath();
+    QString siblingStdlib = turDir + QStringLiteral("/stdlib");
+    if (!QDir(siblingStdlib).exists()) {
+        siblingStdlib =
+            QDir::cleanPath(turDir + QStringLiteral("/../share/turmeric/stdlib"));
+    }
     if (QDir(siblingStdlib).exists()) {
         extraEnv << QStringLiteral("TUR_STDLIB_DIR=") + siblingStdlib;
     }

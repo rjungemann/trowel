@@ -146,11 +146,11 @@ endif()
 
 # ---- Bundle a prebuilt Turmeric toolchain next to the editor ----------------
 # Trowel ships a pinned `tur` so a fresh install has a working REPL / run-file
-# without the user installing Turmeric separately. Each release tarball's layout
-# (`tur` and `stdlib/` side by side) matches what ResolveTurBinary() /
-# bundledTurPath() (src/repl/repl_session.cpp) probe for:
-#   macOS: Trowel.app/Contents/Resources/turmeric/tur
-#   Linux: <dir-of-trowel-binary>/turmeric/tur
+# without the user installing Turmeric separately. The archive is staged
+# verbatim, so its internal layout is whatever the pinned version published;
+# bundledTurPath() (src/repl/repl_session.cpp) probes for either shape under:
+#   macOS: Trowel.app/Contents/Resources/turmeric/
+#   Linux: <dir-of-trowel-binary>/turmeric/
 # `tur` locates its stdlib by walking up from its own directory, so no env var
 # is needed. When no prebuilt matches the host, we skip bundling and fall back
 # to `tur` on PATH at runtime.
@@ -164,12 +164,13 @@ set(TROWEL_TURMERIC_VERSION "v0.44.2")
 # the release's sha256sums.txt.
 #
 # `_turmeric_ext` exists because the Windows asset is a .zip where the others
-# are .tar.gz, and it ships the PREFIX layout (bin/ include/ lib/ share/) where
-# the others are flat -- so the staged tree is turmeric/bin/tur.exe on Windows
-# and turmeric/tur elsewhere, which is what bundledTurPath()
-# (src/repl/repl_session.cpp) probes for. See the turmeric-side report
-# `unify-release-archive-layout`; if those layouts are ever unified this can
-# collapse back to one shape.
+# are .tar.gz. The archive LAYOUT no longer needs a per-platform branch here:
+# Windows has always shipped the PREFIX layout (bin/ include/ lib/ share/) and
+# the .tar.gz targets were flat through v0.46.0 before being unified onto it,
+# so bundledTurPath() (src/repl/repl_session.cpp) accepts either and this
+# staging copies whichever one the pin fetches. Bumping
+# TROWEL_TURMERIC_VERSION across the unification therefore needs no change on
+# this side. See the turmeric-side report `unify-release-archive-layout`.
 set(_turmeric_key "")
 set(_turmeric_ext "tar.gz")
 if(APPLE)
