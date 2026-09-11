@@ -609,7 +609,7 @@ def test_a_top_level_file_stops_at_a_breakpoint(trowel, fixture_files: Path):
     Turmeric v0.44.0 removed that limitation — "`tur dap` and `tur trace` now
     instrument top-level programs, not only `(main)` ... the launch path now
     pre-scans for a top-level `main` and arms the debugger around the file load
-    itself when there isn't one." Trowel bundles v0.44.2, so the breakpoint
+    itself when there isn't one." Trowel bundles v0.46.0, so the breakpoint
     binds and the session stops. MainWindow's matching pre-launch warning is
     gone for the same reason.
 
