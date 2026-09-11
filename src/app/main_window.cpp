@@ -1811,7 +1811,7 @@ void MainWindow::startDebugSession(bool replay) {
     // That stopped being true in Turmeric v0.44.0: "`tur dap` and `tur trace`
     // now instrument top-level programs, not only `(main)` ... the launch path
     // now pre-scans for a top-level `main` and arms the debugger around the file
-    // load itself when there isn't one."  Trowel bundles v0.44.2, so breakpoints
+    // load itself when there isn't one."  Trowel bundles v0.46.0, so breakpoints
     // in a top-level file bind and the debugger stops.
     //
     // Removed rather than reworded: it told the user to restructure their
